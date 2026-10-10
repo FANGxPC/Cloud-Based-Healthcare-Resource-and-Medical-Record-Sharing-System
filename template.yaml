@@ -257,7 +257,9 @@ Resources:
       Description: Hospitals and resource availability
       LoggingConfig:
         LogGroup: !Ref ResourcesLogGroup
-      # Least privilege: read hospitals; read and update resources. No delete permission.
+      # Least privilege: no Scan or delete on patients, no read of the audit log, no deletes anywhere.
+      # A TransactWriteItems call is authorised per item, so each table gets only the action its
+      # part of the admit/discharge transaction performs.
       Policies:
         - DynamoDBReadPolicy: { TableName: !Ref HospitalsTable }
         - DynamoDBReadPolicy: { TableName: !Ref ResourcesTable }
@@ -265,6 +267,12 @@ Resources:
             - Effect: Allow
               Action: dynamodb:UpdateItem
               Resource: !GetAtt ResourcesTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource: !GetAtt PatientsTable.Arn
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AuditLogTable.Arn
       Events:
         ListHospitals:
           Type: HttpApi
@@ -281,6 +289,12 @@ Resources:
         UpdateResource:
           Type: HttpApi
           Properties: { ApiId: !Ref HttpApi, Path: '/hospitals/{hospitalId}/resources/{resourceType}', Method: PUT }
+        Admit:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/hospitals/{hospitalId}/admissions', Method: POST }
+        Discharge:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/hospitals/{hospitalId}/admissions/{patientId}', Method: DELETE }
 
   ResourcesLogGroup:
     Type: AWS::Logs::LogGroup

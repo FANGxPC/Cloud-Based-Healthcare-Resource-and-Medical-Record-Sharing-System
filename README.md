@@ -25,8 +25,15 @@ sam validate --lint
 sam build
 sam local start-api            # then: curl http://127.0.0.1:3000/health
 
-# 3. Local DynamoDB (from Phase 1.2 on)
-docker compose up -d           # http://localhost:8000
+# 3. Local DynamoDB on http://localhost:8000. Either Docker:
+docker compose up -d
+#    or the plain Java jar (no Docker needed), from https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.DownloadingAndRunning.html
+java -Djava.library.path=./DynamoDBLocal_lib -jar DynamoDBLocal.jar -inMemory -sharedDb -port 8000
+
+# 3b. Race-safety proof: 50 concurrent admissions for the last bed, exactly 1 succeeds
+cd backend
+DYNAMODB_ENDPOINT=http://localhost:8000 go test ./internal/db -run Integration -v
+cd ..
 
 # 4. Frontend (http://localhost:5173, /api is proxied to the local API)
 cd frontend

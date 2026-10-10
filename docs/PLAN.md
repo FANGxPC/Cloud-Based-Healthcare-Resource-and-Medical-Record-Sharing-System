@@ -89,10 +89,11 @@ an email address for the SNS subscription (you confirm it from your inbox).
 | Step | Status |
 |---|---|
 | CLAUDE.md, PLAN.md, DATA_MODEL.md, openapi.yaml | ✅ drafted |
-| 0.1 Tools | 🟡 Go 1.27.2, SAM 1.168.0 installed. Docker pending |
+| 0.1 Tools | ✅ Go 1.27.2, SAM 1.168.0. DynamoDB Local runs as a Java jar (Docker optional) |
 | 0.2 Backend scaffold + template.yaml (Cognito, HTTP API, /health) | ✅ vet, test, validate --lint, build pass |
 | 0.3 Frontend shell | ✅ builds |
 | 1.1 Auth & roles (Cognito, JWT authorizer, `internal/auth`, `/me`, seed users, login UI) | ✅ code + unit tests. ⏳ not yet deployed |
 | 1.2 Hospitals & resources (+ 3.1 TTL cache, done early) | ✅ code + unit tests. ⏳ not yet deployed |
 | 1.3 Patient records + audit | ✅ code + unit tests. ⏳ not yet deployed |
+| 2.1 Race-safe admissions + concurrency proof | ✅ 50-way race → exactly 1 admitted (DynamoDB Local, repeated 5×) |
 | Everything else | ⏳ not started |

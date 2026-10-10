@@ -13,7 +13,9 @@ info:
     `custom:hospital_id`). The vendor extension `x-allowed-groups` lists which Cognito groups may call
     each operation, and `x-authz` describes any extra ownership rule.
 
-    **Auditing:** operations marked `x-audited: true` write an AuditLog entry when called by a Doctor.
+    **Auditing:** operations marked `x-audited: true` write an AuditLog entry. Doctor reads of patient
+    data are audited before the data is returned (fail closed). Writes (admit, discharge, transfers)
+    write their audit entry in the same DynamoDB transaction as the change.
 
     All data in this system is **synthetic**.
 
@@ -209,7 +211,8 @@ paths:
       description: |
         Decrements `available` with a DynamoDB conditional write (`available > 0`), in the same
         transaction that records the admission on the patient. Concurrent requests for the last unit
-        get exactly one `201` and the rest `409 NO_CAPACITY`.
+        get exactly one `201` and the rest `409 NO_CAPACITY` (proven by
+        `backend/internal/db/admissions_integration_test.go`).
       x-allowed-groups: [Doctor, HospitalAdmin]
       x-authz: "claims.custom:hospital_id == path.hospitalId"
       x-audited: true
@@ -233,6 +236,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/Busy' }
 
   /hospitals/{hospitalId}/admissions/{patientId}:
     parameters:
@@ -249,11 +253,13 @@ paths:
         '204': { description: Discharged }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: "`NOT_ADMITTED_HERE`"
+          description: "`NOT_ADMITTED_HERE` or `CAPACITY_OVERFLOW`"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/Busy' }
 
   # ---------------------------------------------------------------- Patients
   /patients:
@@ -692,6 +698,11 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     NotFound:
       description: Not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Busy:
+      description: Too many concurrent writes to the same resource even after retries (`BUSY`). Retry shortly.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }

@@ -78,3 +78,7 @@ input[type='number'] { width: 80px; }
 @media (max-width: 600px) {
   .profile dl { grid-template-columns: 1fr; }
 }
+
+/* bed management */
+.actions-box { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.actions-box h3 { font-size: 1rem; }

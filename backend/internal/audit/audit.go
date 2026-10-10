@@ -34,9 +34,17 @@ func (r Recorder) Record(ctx context.Context, actor auth.Principal, patientID st
 	if r.Now != nil {
 		now = r.Now
 	}
-	ts := now().UTC().Format(time.RFC3339)
+	return r.Store.Put(ctx, NewEvent(actor, patientID, action, targetID, requestID, now()))
+}
 
-	return r.Store.Put(ctx, models.AuditEvent{
+// NewEvent builds an event without storing it. Write operations (admit, discharge, transfers)
+// put it in the SAME DynamoDB transaction as the change, so the change and its audit record
+// succeed or fail together.
+func NewEvent(actor auth.Principal, patientID string, action models.AuditAction,
+	targetID, requestID string, at time.Time) models.AuditEvent {
+
+	ts := at.UTC().Format(time.RFC3339)
+	return models.AuditEvent{
 		PatientID: patientID,
 		// Timestamp first so the sort key orders events by time. The ULID makes it unique
 		// even when two events happen in the same second.
@@ -48,5 +56,5 @@ func (r Recorder) Record(ctx context.Context, actor auth.Principal, patientID st
 		TargetID:        targetID,
 		Timestamp:       ts,
 		RequestID:       requestID,
-	})
+	}
 }

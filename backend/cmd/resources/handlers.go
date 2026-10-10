@@ -30,10 +30,11 @@ type resourceStore interface {
 }
 
 type app struct {
-	hospitals hospitalStore
-	resources resourceStore
-	cache     *cache.Value[[]models.Resource]
-	log       *slog.Logger
+	hospitals  hospitalStore
+	resources  resourceStore
+	admissions admissionStore
+	cache      *cache.Value[[]models.Resource]
+	log        *slog.Logger
 }
 
 var (
@@ -51,6 +52,8 @@ func (a *app) routes() *httpx.Router {
 	rt.Handle("GET /resources", staff, a.listResources)
 	rt.Handle("GET /hospitals/{hospitalId}/resources", staff, a.listHospitalResources)
 	rt.Handle("PUT /hospitals/{hospitalId}/resources/{resourceType}", admins, a.updateResource)
+	rt.Handle("POST /hospitals/{hospitalId}/admissions", staff, a.admit)
+	rt.Handle("DELETE /hospitals/{hospitalId}/admissions/{patientId}", staff, a.discharge)
 	return rt
 }
 

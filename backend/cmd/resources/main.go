@@ -3,6 +3,7 @@
 //	GET /hospitals, GET /hospitals/{hospitalId}
 //	GET /resources (cached ~15 s), GET /hospitals/{hospitalId}/resources
 //	PUT /hospitals/{hospitalId}/resources/{resourceType}
+//	POST /hospitals/{hospitalId}/admissions, DELETE /hospitals/{hospitalId}/admissions/{patientId}
 //
 // Handlers live in handlers.go. This file only wires up dependencies.
 package main
@@ -32,10 +33,11 @@ func main() {
 	tables := db.TablesFromEnv()
 
 	a := &app{
-		hospitals: db.Hospitals{C: client, Table: tables.Hospitals},
-		resources: db.Resources{C: client, Table: tables.Resources},
-		cache:     &cache.Value[[]models.Resource]{TTL: 15 * time.Second},
-		log:       log,
+		hospitals:  db.Hospitals{C: client, Table: tables.Hospitals},
+		resources:  db.Resources{C: client, Table: tables.Resources},
+		admissions: db.Admissions{C: client, Tables: tables},
+		cache:      &cache.Value[[]models.Resource]{TTL: 15 * time.Second},
+		log:        log,
 	}
 	lambda.Start(a.routes().Serve)
 }

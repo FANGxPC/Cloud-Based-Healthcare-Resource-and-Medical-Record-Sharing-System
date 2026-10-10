@@ -129,4 +129,10 @@ export const api = {
     request<Page<AuditEvent>>('GET', `/patients/${patientId}/access-log${qs({ nextToken })}`),
 
   hospitalAudit: (nextToken?: string) => request<Page<AuditEvent>>('GET', `/audit${qs({ nextToken })}`),
+
+  admit: (hospitalId: string, patientId: string, resourceType: ResourceType) =>
+    request<Admission>('POST', `/hospitals/${hospitalId}/admissions`, { patientId, resourceType }),
+
+  discharge: (hospitalId: string, patientId: string) =>
+    request<void>('DELETE', `/hospitals/${hospitalId}/admissions/${patientId}`),
 };
