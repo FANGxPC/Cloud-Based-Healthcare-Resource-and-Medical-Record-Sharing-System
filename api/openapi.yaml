@@ -750,7 +750,7 @@ components:
       required: [hospitalId, name]
       properties:
         hospitalId: { type: string, example: H001 }
-        name: { type: string, example: Synthetic General Hospital North }
+        name: { type: string, example: Sanjeevani Multispeciality Hospital }
         city: { type: string }
         address: { type: string }
         phone: { type: string }

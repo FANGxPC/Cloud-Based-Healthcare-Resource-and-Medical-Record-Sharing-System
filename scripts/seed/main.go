@@ -31,6 +31,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	cip "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	ciptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 
 	"healthcloud/internal/db"
 )
@@ -45,6 +47,7 @@ func main() {
 	local := flag.Bool("local", false, "seed DynamoDB Local at http://localhost:8000 and create tables")
 	userPoolID := flag.String("user-pool-id", "", "Cognito user pool ID (AWS mode); empty = skip users")
 	region := flag.String("region", "us-east-1", "AWS region")
+	resetPatients := flag.Bool("reset-patients", false, "delete all existing patient rows before seeding (demo logins keep their IDs)")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -70,6 +73,8 @@ func main() {
 	}
 
 	r := rand.New(rand.NewPCG(42, 2026)) // fixed seed: the same synthetic data every run
+	// Patient IDs come from their own fixed sequence, so changing the name lists never changes the IDs.
+	idRand := rand.New(rand.NewPCG(7, 2026))
 	now := db.Now()
 
 	// 1. Hospitals
@@ -115,8 +120,11 @@ func main() {
 
 	// 4. Patients: demo logins first (ID = Cognito sub), then synthetic patients without logins.
 	patients := db.Patients{C: client, Table: tables.Patients}
+	if *resetPatients {
+		fmt.Println("✓ removed", deleteAllPatients(ctx, client, tables.Patients), "old patient rows")
+	}
 	for i := 0; i < totalPatients; i++ {
-		id := deterministicUUID(r)
+		id := deterministicUUID(idRand)
 		if i < len(demoPatientIDs) {
 			id = demoPatientIDs[i]
 		}
@@ -190,4 +198,20 @@ func must(err error) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// deleteAllPatients removes every row from the Patients table (used with -reset-patients).
+func deleteAllPatients(ctx context.Context, c *dynamodb.Client, table string) int {
+	n := 0
+	p := dynamodb.NewScanPaginator(c, &dynamodb.ScanInput{TableName: aws.String(table), ProjectionExpression: aws.String("patientId")})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		must(err)
+		for _, item := range page.Items {
+			_, err := c.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(table), Key: map[string]ddbtypes.AttributeValue{"patientId": item["patientId"]}})
+			must(err)
+			n++
+		}
+	}
+	return n
 }

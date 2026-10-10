@@ -13,23 +13,27 @@ import (
 // All data below is SYNTHETIC: invented names, dates and conditions with no link to real people.
 // The generator uses a fixed random seed, so every run produces the same data (repeatable demos).
 
+// Fictional Indian hospitals (invented names, not real institutions).
 var hospitalSeeds = []models.Hospital{
-	{HospitalID: "H001", Name: "Northfield General Hospital", City: "Northfield", Address: "1 Synthetic Way", Phone: "+00 100 0001"},
-	{HospitalID: "H002", Name: "Riverside Medical Centre", City: "Riverside", Address: "2 Example Road", Phone: "+00 100 0002"},
-	{HospitalID: "H003", Name: "Lakeview Community Hospital", City: "Lakeview", Address: "3 Sample Street", Phone: "+00 100 0003"},
-	{HospitalID: "H004", Name: "Hillcrest Specialty Hospital", City: "Hillcrest", Address: "4 Mock Avenue", Phone: "+00 100 0004"},
-	{HospitalID: "H005", Name: "Eastgate Emergency Hospital", City: "Eastgate", Address: "5 Test Lane", Phone: "+00 100 0005"},
+	{HospitalID: "H001", Name: "Sanjeevani Multispeciality Hospital", City: "Pune", Address: "14 Karve Road, Kothrud", Phone: "+91 20 4100 0001"},
+	{HospitalID: "H002", Name: "Arogya Medical Centre", City: "Lucknow", Address: "22 Shahnajaf Road, Hazratganj", Phone: "+91 522 410 0002"},
+	{HospitalID: "H003", Name: "Dhanvantari General Hospital", City: "Bengaluru", Address: "8 Hosur Road, Koramangala", Phone: "+91 80 4100 0003"},
+	{HospitalID: "H004", Name: "Shushrusha Heart & Critical Care", City: "Chennai", Address: "31 Anna Salai, Teynampet", Phone: "+91 44 4100 0004"},
+	{HospitalID: "H005", Name: "Jeevan Raksha Emergency Hospital", City: "Jaipur", Address: "5 Tonk Road, Malviya Nagar", Phone: "+91 141 410 0005"},
 }
 
+// Indian first names and surnames from across regions (combinations are random and fictional).
 var (
-	firstNames = []string{"Asha", "Ben", "Chen", "Divya", "Elena", "Farid", "Grace", "Hiro", "Isla", "Jonah",
-		"Kavya", "Liam", "Maya", "Nikhil", "Olivia", "Pablo", "Quinn", "Riya", "Sam", "Tara", "Umar", "Vera", "Wen", "Yusuf", "Zara"}
-	lastNames = []string{"Anders", "Bhatt", "Costa", "Dawson", "Evans", "Fischer", "Gupta", "Hughes", "Iyer", "Jensen",
-		"Khan", "Lopez", "Mehta", "Novak", "Okafor", "Patel", "Quinn", "Rossi", "Singh", "Tanaka", "Usman", "Varga", "Walsh", "Xu", "Young"}
+	firstNames = []string{"Aarav", "Ananya", "Arjun", "Diya", "Ishaan", "Kavya", "Rohan", "Priya", "Vihaan", "Meera",
+		"Aditya", "Sneha", "Karthik", "Lakshmi", "Rahul", "Pooja", "Siddharth", "Neha", "Vikram", "Anjali",
+		"Farhan", "Ayesha", "Harpreet", "Gurpreet", "Joseph", "Tenzin", "Manish", "Deepika", "Suresh", "Kiran"}
+	lastNames = []string{"Sharma", "Verma", "Iyer", "Reddy", "Nair", "Patel", "Gupta", "Singh", "Khan", "Das",
+		"Mukherjee", "Banerjee", "Menon", "Pillai", "Joshi", "Kulkarni", "Deshmukh", "Chauhan", "Rao", "Agarwal",
+		"Bhat", "Fernandes", "Saxena", "Mishra", "Chatterjee"}
 	bloodGroups = []string{"O+", "O-", "A+", "A-", "B+", "B-", "AB+", "AB-"}
-	allergies   = []string{"Penicillin", "Peanuts", "Latex", "Sulfa drugs", "Shellfish", "Aspirin"}
+	allergies   = []string{"Penicillin", "Peanuts", "Latex", "Sulfa drugs", "Shellfish", "Aspirin", "Dust mites"}
 	conditions  = []string{"Hypertension", "Type 2 diabetes", "Asthma", "COPD", "Atrial fibrillation",
-		"Chronic kidney disease", "Pneumonia", "Migraine", "Osteoarthritis", "Hypothyroidism"}
+		"Chronic kidney disease", "Pneumonia", "Migraine", "Osteoarthritis", "Hypothyroidism", "Anaemia", "Dengue (recovered)"}
 )
 
 // generateResources creates ICU beds, general beds and ventilators for each hospital.
@@ -86,7 +90,7 @@ func generatePatient(r *rand.Rand, id string, hospitals []models.Hospital, now s
 		BloodGroup:        pick(bloodGroups),
 		Allergies:         pickSome(allergies, 2),
 		Conditions:        pickSome(conditions, 3),
-		EmergencyContact:  &models.EmergencyContact{Name: pick(firstNames) + " " + pick(lastNames), Phone: fmt.Sprintf("+00 200 %04d", r.IntN(10000))},
+		EmergencyContact:  &models.EmergencyContact{Name: pick(firstNames) + " " + pick(lastNames), Phone: fmt.Sprintf("+91 98%03d %05d", r.IntN(1000), r.IntN(100000))},
 		HomeHospitalID:    home,
 		CurrentHospitalID: home,
 		CreatedAt:         now,

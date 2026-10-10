@@ -80,6 +80,7 @@ It reads `frontend/.env.local` and `.env.demo-users`, both git-ignored.
 ```bash
 cd scripts/seed
 go run . -local                                   # DynamoDB Local: creates tables + data
+# add -reset-patients to wipe old patient rows first (e.g. after changing the name lists)
 SEED_PASSWORD='<choose one>' go run . -stage dev -user-pool-id <UserPoolId> -region us-east-1   # AWS
 ```
 
