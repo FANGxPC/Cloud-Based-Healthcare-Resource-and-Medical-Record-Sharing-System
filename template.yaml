@@ -19,6 +19,15 @@ Parameters:
     Type: String
     Default: http://localhost:5173
     Description: Browser origin allowed by CORS (the Vite dev server by default).
+  AlertEmail:
+    Type: String
+    Default: ''
+    Description: >
+      Email that receives low-resource and transfer alerts (SNS email subscription; you must click
+      the confirmation link AWS sends). Leave empty to skip the subscription.
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
 
 # ---------------------------------------------------------------------------
 # Defaults applied to every AWS::Serverless::Function
@@ -59,6 +68,10 @@ Resources:
     Properties:
       TableName: !Sub hc-resources-${Stage}
       BillingMode: PAY_PER_REQUEST
+      # Change feed consumed by ResourceAlertsFunction. Old and new images let it detect the
+      # moment "available" crosses below "threshold".
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
       AttributeDefinitions:
         - { AttributeName: hospitalId, AttributeType: S }
         - { AttributeName: resourceType, AttributeType: S }
@@ -344,6 +357,62 @@ Resources:
       LogGroupName: !Sub /aws/lambda/hc-patients-${Stage}
       RetentionInDays: 7
 
+  # -------------------------------------------------------------------------
+  # Alerts: SNS topic with EMAIL subscriptions only (SMS is not free)
+  # -------------------------------------------------------------------------
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub hc-alerts-${Stage}
+      DisplayName: HealthCloud alerts
+
+  AlertsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+      # To send each admin only their own hospital's alerts, add one subscription per admin with:
+      # FilterPolicy: { hospitalId: [H001] }
+
+  # Reads the Resources stream and emails when availability drops below the threshold.
+  ResourceAlertsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub hc-resource-alerts-${Stage}
+      CodeUri: backend/cmd/resource-alerts
+      Description: Low-resource alerts from the Resources DynamoDB Stream
+      LoggingConfig:
+        LogGroup: !Ref ResourceAlertsLogGroup
+      Environment:
+        Variables:
+          ALERTS_TOPIC_ARN: !Ref AlertsTopic
+      Policies:
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertsTopic.TopicName }
+      Events:
+        ResourcesStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt ResourcesTable.StreamArn
+            StartingPosition: LATEST
+            BatchSize: 10
+            MaximumRetryAttempts: 3
+            BisectBatchOnFunctionError: true
+            FunctionResponseTypes: [ReportBatchItemFailures]
+            # Only updates can cross the threshold, so skip inserts and deletes before Lambda runs.
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"eventName": ["MODIFY"]}'
+
+  ResourceAlertsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/hc-resource-alerts-${Stage}
+      RetentionInDays: 7
+
 # ---------------------------------------------------------------------------
 # Outputs: values the frontend (.env.local) and seed scripts need
 # ---------------------------------------------------------------------------
@@ -355,6 +424,8 @@ Outputs:
     Value: !Ref UserPool
   UserPoolClientId:
     Value: !Ref UserPoolClient
+  AlertsTopicArn:
+    Value: !Ref AlertsTopic
   Region:
     Value: !Ref AWS::Region
   Stage:
