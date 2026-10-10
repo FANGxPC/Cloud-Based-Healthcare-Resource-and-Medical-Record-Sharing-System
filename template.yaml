@@ -184,7 +184,7 @@ Resources:
           - ObjectOwnership: BucketOwnerEnforced # ACLs disabled; IAM decides access
       CorsConfiguration: # lets the browser PUT/GET with presigned URLs from the frontend origin
         CorsRules:
-          - AllowedOrigins: [!Ref FrontendOrigin]
+          - AllowedOrigins: [!Ref FrontendOrigin, !Sub 'https://${FrontendDistribution.DomainName}']
             AllowedMethods: [PUT, GET]
             AllowedHeaders: [content-type]
             MaxAge: 600
@@ -207,6 +207,84 @@ Resources:
             Resource:
               - !GetAtt DocumentsBucket.Arn
               - !Sub '${DocumentsBucket.Arn}/*'
+            Condition:
+              Bool: { 'aws:SecureTransport': 'false' }
+
+  # -------------------------------------------------------------------------
+  # Frontend hosting: private S3 bucket served over HTTPS by CloudFront.
+  # CloudFront always-free tier: 1 TB transfer and 10M requests per month.
+  # The bucket is NOT public: CloudFront reads it via Origin Access Control (OAC).
+  # Upload the built site with scripts/deploy-frontend.ps1.
+  # -------------------------------------------------------------------------
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub hc-web-${Stage}-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+
+  FrontendOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub hc-web-oac-${Stage}
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub HealthCloud frontend (${Stage})
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100 # North America + Europe edges only (cheapest class)
+        Origins:
+          - Id: web
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt FrontendOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: '' # empty because OAC is used instead
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # AWS managed "CachingOptimized"
+        # Single-page app: unknown paths serve index.html. S3 returns 403 for missing keys under OAC.
+        CustomErrorResponses:
+          - { ErrorCode: 403, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0 }
+          - { ErrorCode: 404, ResponseCode: 200, ResponsePagePath: /index.html, ErrorCachingMinTTL: 0 }
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontOnly # only THIS distribution may read objects
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}'
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt FrontendBucket.Arn, !Sub '${FrontendBucket.Arn}/*']
             Condition:
               Bool: { 'aws:SecureTransport': 'false' }
 
@@ -326,7 +404,8 @@ Resources:
         ThrottlingBurstLimit: 50
         ThrottlingRateLimit: 25
       CorsConfiguration:
-        AllowOrigins: [!Ref FrontendOrigin]
+        # The local dev server and the CloudFront-hosted site
+        AllowOrigins: [!Ref FrontendOrigin, !Sub 'https://${FrontendDistribution.DomainName}']
         AllowHeaders: [authorization, content-type]
         AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
         MaxAge: 600
@@ -747,6 +826,13 @@ Resources:
 # Outputs: values the frontend (.env.local) and seed scripts need
 # ---------------------------------------------------------------------------
 Outputs:
+  WebsiteUrl:
+    Description: The deployed frontend (HTTPS via CloudFront)
+    Value: !Sub https://${FrontendDistribution.DomainName}
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+  FrontendDistributionId:
+    Value: !Ref FrontendDistribution
   ApiUrl:
     Description: Base URL of the HTTP API
     Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
