@@ -1,11 +1,132 @@
-// Base URL for API calls. In dev we go through the Vite proxy (/api → backend);
-// in a production build we call the deployed API Gateway URL directly.
+// Typed client for the HealthCloud API (see api/openapi.yaml).
+import { getIdToken } from './auth';
+
+// In dev, calls go through the Vite proxy (/api → backend). In a production build they go
+// straight to the API Gateway URL.
 export const API_BASE = import.meta.env.DEV ? '/api' : import.meta.env.VITE_API_URL;
 
-export type Health = { status: string; stage: string };
+// ---- types (mirror components/schemas in openapi.yaml) ----
 
-export async function getHealth(): Promise<Health> {
-  const res = await fetch(`${API_BASE}/health`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+export type ResourceType = 'ICU_BED' | 'GENERAL_BED' | 'VENTILATOR';
+export const RESOURCE_LABELS: Record<ResourceType, string> = {
+  ICU_BED: 'ICU beds',
+  GENERAL_BED: 'General beds',
+  VENTILATOR: 'Ventilators',
+};
+
+export type Hospital = { hospitalId: string; name: string; city?: string; address?: string; phone?: string };
+
+export type Resource = {
+  hospitalId: string;
+  hospitalName?: string;
+  resourceType: ResourceType;
+  total: number;
+  available: number;
+  threshold: number;
+  low: boolean;
+  version: number;
+  updatedAt?: string;
+};
+
+export type Admission = { hospitalId: string; resourceType: ResourceType; admittedAt: string };
+
+export type PatientSummary = {
+  patientId: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  currentHospitalId: string;
+  admission: Admission | null;
+};
+
+export type Patient = PatientSummary & {
+  sex: string;
+  bloodGroup: string;
+  allergies: string[];
+  conditions: string[];
+  homeHospitalId: string;
+  emergencyContact?: { name: string; phone: string };
+};
+
+export type AuditEvent = {
+  patientId: string;
+  actorId: string;
+  actorGroup: string;
+  actorHospitalId?: string;
+  action: string;
+  targetId?: string;
+  timestamp: string;
+};
+
+export type Page<T> = { items: T[]; nextToken?: string };
+
+// ---- errors ----
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
+
+// ---- core fetch ----
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const token = await getIdToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return undefined as T;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new ApiError(res.status, data.code ?? 'HTTP_' + res.status, data.message ?? res.statusText);
+  }
+  return data as T;
+}
+
+const qs = (params: Record<string, string | undefined>) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) p.set(k, v);
+  const s = p.toString();
+  return s ? `?${s}` : '';
+};
+
+// ---- endpoints ----
+
+export const api = {
+  health: () => request<{ status: string; stage: string }>('GET', '/health'),
+
+  hospitals: () => request<Page<Hospital>>('GET', '/hospitals'),
+
+  resources: (resourceType?: ResourceType, onlyAvailable?: boolean) =>
+    request<{ cachedAt: string; items: Resource[] }>(
+      'GET',
+      `/resources${qs({ resourceType, onlyAvailable: onlyAvailable ? 'true' : undefined })}`,
+    ),
+
+  hospitalResources: (hospitalId: string) => request<Page<Resource>>('GET', `/hospitals/${hospitalId}/resources`),
+
+  updateResource: (
+    hospitalId: string,
+    type: ResourceType,
+    body: { total?: number; available?: number; threshold?: number; version: number },
+  ) => request<Resource>('PUT', `/hospitals/${hospitalId}/resources/${type}`, body),
+
+  patients: (hospitalId?: string, lastNamePrefix?: string, nextToken?: string) =>
+    request<Page<PatientSummary>>('GET', `/patients${qs({ hospitalId, lastNamePrefix, nextToken })}`),
+
+  patient: (patientId: string) => request<Patient>('GET', `/patients/${patientId}`),
+
+  accessLog: (patientId: string, nextToken?: string) =>
+    request<Page<AuditEvent>>('GET', `/patients/${patientId}/access-log${qs({ nextToken })}`),
+
+  hospitalAudit: (nextToken?: string) => request<Page<AuditEvent>>('GET', `/audit${qs({ nextToken })}`),
+};

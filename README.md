@@ -46,3 +46,20 @@ sam deploy --guided --parameter-overrides Stage=demo    # stable stack for prese
 
 Copy the stack outputs (`ApiUrl`, `UserPoolId`, `UserPoolClientId`) into `frontend/.env.local`.
 `samconfig.toml` and `.env.local` are git-ignored.
+
+## Seed synthetic data
+
+```bash
+cd scripts/seed
+go run . -local                                   # DynamoDB Local: creates tables + data
+SEED_PASSWORD='<choose one>' go run . -stage dev -user-pool-id <UserPoolId> -region us-east-1   # AWS
+```
+
+This creates 5 hospitals, their beds and ventilators, 50 synthetic patients, and these demo logins
+(all with `SEED_PASSWORD`):
+
+| Login | Role |
+|---|---|
+| `doctor.h001@example.com` … `doctor.h005@example.com` | Doctor at that hospital |
+| `admin.h001@example.com` … `admin.h005@example.com` | HospitalAdmin of that hospital |
+| `patient1@example.com` … `patient3@example.com` | Patient (record at H001) |

@@ -32,7 +32,7 @@ Key docs (keep them in sync with the code — they are used in the project repor
 |---|---|
 | Backend | Go (latest stable, pinned in `backend/go.mod`), `aws-lambda-go`, `aws-sdk-go-v2` |
 | Lambda | runtime `provided.al2023`, arch `arm64`, SAM `Metadata: BuildMethod: go1.x`, handler `bootstrap` |
-| IaC | AWS SAM `template.yaml`. The `Stage` parameter (default `dev`) is suffixed on **every** resource name, e.g. `Patients-dev`, so the `demo` stack stays stable for presentations |
+| IaC | AWS SAM `template.yaml`. The `Stage` parameter (default `dev`) is suffixed on **every** resource name (`hc-<name>-<stage>`, e.g. `hc-patients-dev`), so the `demo` stack stays stable for presentations |
 | API | API Gateway **HTTP API** + **JWT authorizer** (Cognito issuer, audience = app client ID) |
 | Auth | Cognito User Pool. Groups `Patient`, `Doctor`, `HospitalAdmin`. Custom attribute `custom:hospital_id`. **Self sign-up disabled.** Users are created by the seed script |
 | Data | DynamoDB on-demand: `Hospitals`, `Patients`, `Resources`, `Transfers`, `Documents`, `AuditLog` (see `docs/DATA_MODEL.md`) |

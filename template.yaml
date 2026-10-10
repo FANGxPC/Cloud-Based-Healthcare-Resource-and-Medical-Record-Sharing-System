@@ -33,8 +33,84 @@ Globals:
     Environment:
       Variables:
         STAGE: !Ref Stage
+        HOSPITALS_TABLE: !Ref HospitalsTable
+        RESOURCES_TABLE: !Ref ResourcesTable
+        PATIENTS_TABLE: !Ref PatientsTable
+        AUDIT_TABLE: !Ref AuditLogTable
 
 Resources:
+  # -------------------------------------------------------------------------
+  # Data: DynamoDB, on-demand (PAY_PER_REQUEST). Design: docs/DATA_MODEL.md
+  # Names follow hc-<table>-<stage>. backend/internal/db/schema.go mirrors these
+  # definitions for DynamoDB Local. Keep the two in sync.
+  # -------------------------------------------------------------------------
+  HospitalsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub hc-hospitals-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: hospitalId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: hospitalId, KeyType: HASH }
+
+  ResourcesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub hc-resources-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: hospitalId, AttributeType: S }
+        - { AttributeName: resourceType, AttributeType: S }
+      KeySchema:
+        - { AttributeName: hospitalId, KeyType: HASH }
+        - { AttributeName: resourceType, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: byType # "which hospitals have ICU beds?"
+          KeySchema:
+            - { AttributeName: resourceType, KeyType: HASH }
+            - { AttributeName: hospitalId, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  PatientsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub hc-patients-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: patientId, AttributeType: S }
+        - { AttributeName: currentHospitalId, AttributeType: S }
+        - { AttributeName: lastName, AttributeType: S }
+      KeySchema:
+        - { AttributeName: patientId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: byHospital # patients currently at a hospital, sorted by surname
+          KeySchema:
+            - { AttributeName: currentHospitalId, KeyType: HASH }
+            - { AttributeName: lastName, KeyType: RANGE }
+          Projection:
+            ProjectionType: INCLUDE
+            NonKeyAttributes: [firstName, dateOfBirth, admission]
+
+  AuditLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub hc-auditlog-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: patientId, AttributeType: S }
+        - { AttributeName: eventKey, AttributeType: S }
+        - { AttributeName: actorHospitalId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: patientId, KeyType: HASH }
+        - { AttributeName: eventKey, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: byActorHospital # accesses made by one hospital's staff
+          KeySchema:
+            - { AttributeName: actorHospitalId, KeyType: HASH }
+            - { AttributeName: eventKey, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
   # -------------------------------------------------------------------------
   # Auth: Cognito User Pool
   # -------------------------------------------------------------------------
@@ -168,6 +244,90 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/hc-health-${Stage}
+      RetentionInDays: 7
+
+  # Hospitals and bed/ventilator availability (with the 15 s in-memory cache).
+  ResourcesFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub hc-resources-${Stage}
+      CodeUri: backend/cmd/resources
+      Description: Hospitals and resource availability
+      LoggingConfig:
+        LogGroup: !Ref ResourcesLogGroup
+      # Least privilege: read hospitals; read and update resources. No delete permission.
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref HospitalsTable }
+        - DynamoDBReadPolicy: { TableName: !Ref ResourcesTable }
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt ResourcesTable.Arn
+      Events:
+        ListHospitals:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /hospitals, Method: GET }
+        GetHospital:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/hospitals/{hospitalId}', Method: GET }
+        ListResources:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /resources, Method: GET }
+        ListHospitalResources:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/hospitals/{hospitalId}/resources', Method: GET }
+        UpdateResource:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/hospitals/{hospitalId}/resources/{resourceType}', Method: PUT }
+
+  ResourcesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/hc-resources-${Stage}
+      RetentionInDays: 7
+
+  # Identity, patient records and the audit log.
+  PatientsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub hc-patients-${Stage}
+      CodeUri: backend/cmd/patients
+      Description: Patient records and access audit
+      LoggingConfig:
+        LogGroup: !Ref PatientsLogGroup
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref PatientsTable }
+        - DynamoDBReadPolicy: { TableName: !Ref AuditLogTable }
+        # Append-only audit: PutItem only. No UpdateItem or DeleteItem, so code can't rewrite history.
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AuditLogTable.Arn
+      Events:
+        GetMe:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /me, Method: GET }
+        ListPatients:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /patients, Method: GET }
+        GetPatient:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/patients/{patientId}', Method: GET }
+        GetAccessLog:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/patients/{patientId}/access-log', Method: GET }
+        ListHospitalAudit:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /audit, Method: GET }
+
+  PatientsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/hc-patients-${Stage}
       RetentionInDays: 7
 
 # ---------------------------------------------------------------------------

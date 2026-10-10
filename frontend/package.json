@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "aws-amplify": "6.22.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

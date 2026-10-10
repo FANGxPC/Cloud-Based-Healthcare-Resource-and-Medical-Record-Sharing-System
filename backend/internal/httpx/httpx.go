@@ -3,8 +3,12 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -41,3 +45,42 @@ func JSON(status int, body any) Response {
 func Error(status int, code, message, requestID string) Response {
 	return JSON(status, ErrorBody{Code: code, Message: message, RequestID: requestID})
 }
+
+// Shorthands for the common errors.
+
+func BadRequest(reqID, msg string) Response {
+	return Error(http.StatusBadRequest, "VALIDATION_ERROR", msg, reqID)
+}
+
+func Forbidden(reqID, msg string) Response {
+	return Error(http.StatusForbidden, "FORBIDDEN", msg, reqID)
+}
+
+func NotFound(reqID, msg string) Response {
+	return Error(http.StatusNotFound, "NOT_FOUND", msg, reqID)
+}
+
+func Conflict(reqID, code, msg string) Response {
+	return Error(http.StatusConflict, code, msg, reqID)
+}
+
+// Internal logs the real error and returns a generic 500, so internals never leak to the client.
+func Internal(ctx context.Context, log *slog.Logger, reqID string, err error) Response {
+	log.ErrorContext(ctx, "internal error", "requestId", reqID, "error", err.Error())
+	return Error(http.StatusInternalServerError, "INTERNAL", "internal error", reqID)
+}
+
+// List wraps items in {"items": [...]}, plus "nextToken" when there are more pages.
+// A nil slice is sent as [], not null, which is simpler for the frontend.
+func List[T any](items []T, nextToken string) Response {
+	if items == nil {
+		items = []T{}
+	}
+	body := map[string]any{"items": items}
+	if nextToken != "" {
+		body["nextToken"] = nextToken
+	}
+	return JSON(http.StatusOK, body)
+}
+
+func stringsReader(s string) io.Reader { return strings.NewReader(s) }

@@ -1,7 +1,7 @@
 # Data Model — DynamoDB
 
 All tables use **on-demand billing (`PAY_PER_REQUEST`)** and the default AWS-owned encryption key (free).
-Each table name is suffixed with the stage, e.g. `Patients-dev` and `Patients-demo`.
+Physical table names follow `hc-<table>-<stage>`, e.g. `hc-patients-dev` and `hc-patients-demo`.
 
 Design approach: **one table per entity** (the brief asks for six named tables), each keyed for its
 main access pattern, with GSIs only where a real screen or endpoint needs a second lookup.
