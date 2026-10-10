@@ -3,6 +3,7 @@
 University cloud project. Hospitals in one chain share **synthetic** patient records and track ICU beds,
 general beds and ventilators in real time. Fully serverless and pay-per-request (zero idle cost).
 
+- **Project overview (features, AWS services, novelty):** [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)
 - Architecture (report/viva): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - Plan: [docs/PLAN.md](docs/PLAN.md)
 - Data model: [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
