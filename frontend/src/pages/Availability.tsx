@@ -1,73 +1,150 @@
-// Chain-wide bed and ventilator availability (Doctor, HospitalAdmin).
-// Served from the resources Lambda's 15 s cache, so "data as of" can be up to ~15 s old.
-import { useState } from 'react';
+// Live capacity across the chain (Doctor, HospitalAdmin).
+// Served from the resources Lambda's 15 s cache, so "updated" can be up to ~15 s old.
+import { useEffect, useState } from 'react';
+import { AlertTriangle, BedDouble, Building2, HeartPulse, MapPin, RefreshCw, Search, Wind } from 'lucide-react';
 import { api, RESOURCE_LABELS, type Resource, type ResourceType } from '../api';
-import { Badge, Card, Status, fmtTime, useLoad } from '../components/common';
+import { Badge, Empty, Kpi, PageHeader, Status, useLoad } from '../components/common';
 
 const TYPES: ResourceType[] = ['ICU_BED', 'GENERAL_BED', 'VENTILATOR'];
+const ICONS = { ICU_BED: HeartPulse, GENERAL_BED: BedDouble, VENTILATOR: Wind };
+
+type HospitalRow = { id: string; name: string; byType: Partial<Record<ResourceType, Resource>> };
 
 export default function Availability() {
-  const [onlyAvailable, setOnlyAvailable] = useState(false);
-  const { data, error, loading, reload } = useLoad(() => api.resources(undefined, onlyAvailable), [onlyAvailable]);
+  const { data, error, loading, reload } = useLoad(() => api.resources(), []);
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<'id' | 'icu'>('id');
 
-  // Pivot the flat list into one row per hospital, one column per resource type.
-  const rows = new Map<string, { name: string; byType: Partial<Record<ResourceType, Resource>> }>();
-  for (const r of data?.items ?? []) {
-    const row = rows.get(r.hospitalId) ?? { name: r.hospitalName ?? r.hospitalId, byType: {} };
+  // Auto-refresh every 30 s while the page is open: this is a live dashboard.
+  useEffect(() => {
+    const id = setInterval(reload, 30_000);
+    return () => clearInterval(id);
+  }, [reload]);
+
+  const items = data?.items ?? [];
+  const totals = (t: ResourceType) =>
+    items.filter((r) => r.resourceType === t).reduce((acc, r) => ({ free: acc.free + r.available, total: acc.total + r.total }), { free: 0, total: 0 });
+  const lowCount = new Set(items.filter((r) => r.low).map((r) => r.hospitalId)).size;
+
+  // Pivot the flat list into one entry per hospital.
+  const map = new Map<string, HospitalRow>();
+  for (const r of items) {
+    const row = map.get(r.hospitalId) ?? { id: r.hospitalId, name: r.hospitalName ?? r.hospitalId, byType: {} };
     row.byType[r.resourceType] = r;
-    rows.set(r.hospitalId, row);
+    map.set(r.hospitalId, row);
   }
-  const sorted = [...rows.entries()].sort(([a], [b]) => a.localeCompare(b));
+  let hospitals = [...map.values()].filter((h) => `${h.id} ${h.name}`.toLowerCase().includes(query.toLowerCase()));
+  hospitals = hospitals.sort((a, b) =>
+    sort === 'icu' ? (b.byType.ICU_BED?.available ?? 0) - (a.byType.ICU_BED?.available ?? 0) : a.id.localeCompare(b.id),
+  );
+
+  const icu = totals('ICU_BED');
+  const beds = totals('GENERAL_BED');
+  const vents = totals('VENTILATOR');
 
   return (
-    <Card
-      title="Resource availability across the chain"
-      actions={
-        <div className="row">
-          <label className="inline">
-            <input type="checkbox" checked={onlyAvailable} onChange={(e) => setOnlyAvailable(e.target.checked)} /> Only with free units
-          </label>
-          <button onClick={reload}>Refresh</button>
-        </div>
-      }
-    >
-      <Status loading={loading} error={error} />
+    <>
+      <PageHeader
+        title="Live capacity"
+        subtitle={data ? `Network-wide availability · updated ${new Date(data.cachedAt).toLocaleTimeString()}` : 'Network-wide availability'}
+        actions={
+          <button className="btn" onClick={reload} disabled={loading}>
+            <RefreshCw size={16} className={loading ? 'spin' : undefined} /> Refresh
+          </button>
+        }
+      />
+      <Status loading={loading && !data} error={error} />
+
       {data && (
         <>
-          <table>
-            <thead>
-              <tr>
-                <th>Hospital</th>
-                {TYPES.map((t) => (
-                  <th key={t}>{RESOURCE_LABELS[t]}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map(([id, row]) => (
-                <tr key={id}>
-                  <td>
-                    <strong>{row.name}</strong>
-                    <div className="muted small">{id}</div>
-                  </td>
-                  {TYPES.map((t) => {
-                    const r = row.byType[t];
-                    if (!r) return <td key={t} className="muted">—</td>;
-                    return (
-                      <td key={t}>
-                        <span className="count">{r.available}</span>
-                        <span className="muted"> / {r.total}</span>{' '}
-                        {r.available === 0 ? <Badge tone="bad">Full</Badge> : r.low ? <Badge tone="warn">Low</Badge> : null}
-                      </td>
-                    );
-                  })}
-                </tr>
+          <div className="kpis">
+            <Kpi label="ICU beds free" value={icu.free} suffix={`/ ${icu.total}`} icon={HeartPulse} tone="crit" foot={`${pct(icu)}% of ICU capacity available`} />
+            <Kpi label="General beds free" value={beds.free} suffix={`/ ${beds.total}`} icon={BedDouble} tone="accent" foot={`${pct(beds)}% available`} />
+            <Kpi label="Ventilators free" value={vents.free} suffix={`/ ${vents.total}`} icon={Wind} tone="brand" foot={`${pct(vents)}% available`} />
+            <Kpi
+              label="Hospitals on alert"
+              value={lowCount}
+              suffix={`/ ${map.size}`}
+              icon={AlertTriangle}
+              tone={lowCount ? 'warn' : 'good'}
+              foot={lowCount ? 'Below alert threshold on at least one resource' : 'All above thresholds'}
+            />
+          </div>
+
+          <div className="page-head">
+            <h2>Hospitals</h2>
+            <div className="row">
+              <span className="search">
+                <Search size={16} />
+                <input placeholder="Search hospitals…" value={query} onChange={(e) => setQuery(e.target.value)} />
+              </span>
+              <div className="segmented">
+                <button className={sort === 'id' ? 'on' : ''} onClick={() => setSort('id')}>
+                  A–Z
+                </button>
+                <button className={sort === 'icu' ? 'on' : ''} onClick={() => setSort('icu')}>
+                  Most ICU free
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {hospitals.length === 0 ? (
+            <Empty icon={Building2} title="No hospitals match your search" />
+          ) : (
+            <div className="hosp-grid">
+              {hospitals.map((h) => (
+                <HospitalCard key={h.id} h={h} />
               ))}
-            </tbody>
-          </table>
-          <p className="muted small">Data as of {fmtTime(data.cachedAt)} (cached up to 15 s).</p>
+            </div>
+          )}
         </>
       )}
-    </Card>
+    </>
   );
 }
+
+function HospitalCard({ h }: { h: HospitalRow }) {
+  const rows = TYPES.map((t) => h.byType[t]).filter(Boolean) as Resource[];
+  const full = rows.some((r) => r.available === 0);
+  const low = rows.some((r) => r.low);
+  return (
+    <article className="hosp">
+      <div className="hosp-head">
+        <div>
+          <div className="hosp-name">{h.name}</div>
+          <div className="hosp-meta">
+            <MapPin size={13} /> {h.id}
+          </div>
+        </div>
+        {full ? <Badge tone="bad">At capacity</Badge> : low ? <Badge tone="warn">Low</Badge> : <Badge tone="good">Available</Badge>}
+      </div>
+      {rows.map((r) => (
+        <Meter key={r.resourceType} r={r} />
+      ))}
+    </article>
+  );
+}
+
+function Meter({ r }: { r: Resource }) {
+  const Icon = ICONS[r.resourceType];
+  const width = r.total ? Math.round((r.available / r.total) * 100) : 0;
+  const tone = r.available === 0 ? 'bad' : r.low ? 'warn' : 'good';
+  return (
+    <div className="meter">
+      <div className="meter-top">
+        <span className="meter-label">
+          <Icon size={15} /> {RESOURCE_LABELS[r.resourceType]}
+        </span>
+        <span className="meter-value">
+          <strong>{r.available}</strong> <span>/ {r.total} free</span>
+        </span>
+      </div>
+      <div className="bar" title={`Alert threshold: ${r.threshold}`}>
+        <i className={`fill-${tone}`} style={{ width: `${Math.max(width, r.available ? 4 : 0)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+const pct = (x: { free: number; total: number }) => (x.total ? Math.round((x.free / x.total) * 100) : 0);

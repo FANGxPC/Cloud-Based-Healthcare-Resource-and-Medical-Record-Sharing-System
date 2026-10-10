@@ -1,8 +1,9 @@
 // Transfers for the user's hospital. Incoming: the admin accepts or rejects pending requests.
 // Outgoing: requests this hospital made, with their status.
 import { useState } from 'react';
+import { ArrowLeftRight, ArrowRight, Check, Inbox, RefreshCw, Send, X } from 'lucide-react';
 import { api, RESOURCE_LABELS, type Transfer } from '../api';
-import { Badge, Card, Status, errorText, fmtTime, useLoad } from '../components/common';
+import { Alert, Badge, Card, Empty, Kpi, PageHeader, Status, errorText, fmtTime, useLoad } from '../components/common';
 import TransferStatusBadge from '../components/TransferStatusBadge';
 
 export default function Transfers({ isAdmin }: { isAdmin: boolean }) {
@@ -15,76 +16,105 @@ export default function Transfers({ isAdmin }: { isAdmin: boolean }) {
     setMsg(null);
     try {
       await api.decideTransfer(t.transferId, decision, note || undefined);
-      setMsg({ tone: 'good', text: `Transfer ${decision === 'ACCEPT' ? 'accepted' : 'rejected'}.` });
+      setMsg({ tone: 'good', text: `Transfer ${decision === 'ACCEPT' ? 'accepted: the patient has been moved' : 'rejected: the held bed was released'}.` });
     } catch (e) {
       setMsg({ tone: 'bad', text: errorText(e) });
     }
     reload();
   }
 
+  const items = data?.items ?? [];
+  const pending = items.filter((t) => t.status === 'PENDING_APPROVAL').length;
+  const accepted = items.filter((t) => t.status === 'ACCEPTED').length;
+  const critical = items.filter((t) => t.priority === 'CRITICAL').length;
+
   return (
-    <Card
-      title="Transfers"
-      actions={
-        <div className="row">
-          <button className={direction === 'incoming' ? 'tab active' : 'tab'} onClick={() => setDirection('incoming')}>
-            Incoming
-          </button>
-          <button className={direction === 'outgoing' ? 'tab active' : 'tab'} onClick={() => setDirection('outgoing')}>
-            Outgoing
-          </button>
-          <button onClick={reload}>Refresh</button>
+    <>
+      <PageHeader
+        title="Emergency transfers"
+        subtitle={isAdmin ? 'Approve incoming patients. A bed is already held for every pending request.' : 'Track transfer requests from your hospital.'}
+        actions={
+          <>
+            <div className="segmented">
+              <button className={direction === 'incoming' ? 'on' : ''} onClick={() => setDirection('incoming')}>
+                <Inbox size={14} style={{ verticalAlign: '-2px' }} /> Incoming
+              </button>
+              <button className={direction === 'outgoing' ? 'on' : ''} onClick={() => setDirection('outgoing')}>
+                <Send size={14} style={{ verticalAlign: '-2px' }} /> Outgoing
+              </button>
+            </div>
+            <button className="btn" onClick={reload}>
+              <RefreshCw size={16} /> Refresh
+            </button>
+          </>
+        }
+      />
+
+      {data && (
+        <div className="kpis">
+          <Kpi label="Awaiting decision" value={pending} icon={Inbox} tone={pending ? 'warn' : 'good'} foot={pending ? 'Beds held for these patients' : 'Nothing pending'} />
+          <Kpi label="Accepted" value={accepted} icon={Check} tone="good" foot={`of ${items.length} ${direction} transfers`} />
+          <Kpi label="Critical priority" value={critical} icon={ArrowLeftRight} tone="crit" foot="CRITICAL requests in this list" />
         </div>
-      }
-    >
-      <Status loading={loading} error={error} />
-      {msg && <p className={`alert ${msg.tone}`}>{msg.text}</p>}
-      {data && data.items.length === 0 && <p className="muted">No {direction} transfers.</p>}
-      {data && data.items.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th>Requested</th>
-              <th>Route</th>
-              <th>Resource</th>
-              <th>Priority</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {data.items.map((t) => (
-              <tr key={t.transferId}>
-                <td>
-                  {fmtTime(t.createdAt)}
-                  <div className="mono small muted">{t.transferId}</div>
-                </td>
-                <td>
-                  {t.fromHospitalId} → {t.toHospitalId}
-                </td>
-                <td>{RESOURCE_LABELS[t.resourceType]}</td>
-                <td>
-                  <Badge tone={t.priority === 'CRITICAL' ? 'bad' : t.priority === 'URGENT' ? 'warn' : 'neutral'}>{t.priority}</Badge>
-                </td>
-                <td>
-                  <TransferStatusBadge status={t.status} />
-                  {t.decisionNote && <div className="muted small">{t.decisionNote}</div>}
-                </td>
-                <td>
-                  {isAdmin && direction === 'incoming' && t.status === 'PENDING_APPROVAL' && (
-                    <div className="row">
-                      <button className="primary" onClick={() => decide(t, 'ACCEPT')}>
-                        Accept
-                      </button>
-                      <button onClick={() => decide(t, 'REJECT')}>Reject</button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       )}
-    </Card>
+
+      {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
+
+      <Card title={direction === 'incoming' ? 'Incoming requests' : 'Outgoing requests'} icon={ArrowLeftRight} flush>
+        <Status loading={loading} error={error} />
+        {data && items.length === 0 && <Empty icon={Inbox} title={`No ${direction} transfers yet`} hint="Doctors request transfers from a patient's record." />}
+        {items.length > 0 && (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Requested</th>
+                  <th>Route</th>
+                  <th>Resource</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((t) => (
+                  <tr key={t.transferId}>
+                    <td>
+                      <strong>{fmtTime(t.createdAt)}</strong>
+                      <div className="mono subtle">{t.transferId.slice(-10)}</div>
+                    </td>
+                    <td>
+                      <span className="route">
+                        {t.fromHospitalId} <ArrowRight size={15} className="arrow" /> {t.toHospitalId}
+                      </span>
+                    </td>
+                    <td>{RESOURCE_LABELS[t.resourceType]}</td>
+                    <td>
+                      <Badge tone={t.priority === 'CRITICAL' ? 'bad' : t.priority === 'URGENT' ? 'warn' : 'neutral'}>{t.priority}</Badge>
+                    </td>
+                    <td>
+                      <TransferStatusBadge status={t.status} />
+                      {t.decisionNote && <div className="small muted">{t.decisionNote}</div>}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {isAdmin && direction === 'incoming' && t.status === 'PENDING_APPROVAL' && (
+                        <div className="row" style={{ justifyContent: 'flex-end' }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => decide(t, 'ACCEPT')}>
+                            <Check size={15} /> Accept
+                          </button>
+                          <button className="btn btn-sm btn-danger" onClick={() => decide(t, 'REJECT')}>
+                            <X size={15} /> Reject
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </>
   );
 }
