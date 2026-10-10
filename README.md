@@ -47,13 +47,20 @@ npm run dev
 
 Deploying is always a deliberate, manual step:
 
-```bash
-sam deploy --guided --parameter-overrides Stage=dev     # day-to-day stack
-sam deploy --guided --parameter-overrides Stage=demo    # stable stack for presentations
+```powershell
+sam build; sam deploy --guided --parameter-overrides "Stage=dev AlertEmail=you@example.com"   # first time
+sam build; sam deploy                                         # later (settings saved in samconfig.toml)
+powershell -ExecutionPolicy Bypass -File scriptsdeploy-frontend.ps1   # build + publish the site to S3/CloudFront
 ```
 
-Copy the stack outputs (`ApiUrl`, `UserPoolId`, `UserPoolClientId`) into `frontend/.env.local`.
-`samconfig.toml` and `.env.local` are git-ignored.
+The site URL is the `WebsiteUrl` stack output (`https://xxxx.cloudfront.net`). For local frontend
+development, copy `ApiUrl`, `UserPoolId` and `UserPoolClientId` into `frontend/.env.local`.
+`samconfig.toml`, `.env.local` and `.env.demo-users` are git-ignored.
+
+Demo stack for presentations: `sam deploy --config-env demo`, then run the seed and
+`deploy-frontend.ps1 -Stack hc-demo`.
+
+Forgot the demo password? `powershell -ExecutionPolicy Bypass -File scriptsset-demo-password.ps1`
 
 ## End-to-end test against the deployed stack
 

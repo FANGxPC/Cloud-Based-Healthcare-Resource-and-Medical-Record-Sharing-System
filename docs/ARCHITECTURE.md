@@ -8,6 +8,7 @@ Everything is pay-per-request, so the system costs nothing while idle and stays 
 
 ```mermaid
 flowchart LR
+  CF[CloudFront HTTPS<br/>+ private S3 site bucket] -- "HTML/JS" --> U
   U[Browser<br/>React + Vite] -- "sign in (SRP)" --> COG[Cognito User Pool<br/>groups + hospital_id]
   U -- "HTTPS + ID token" --> API[API Gateway HTTP API<br/>JWT authorizer]
   U -- "presigned PUT/GET" --> S3[(S3 documents<br/>private, SSE-S3)]
@@ -28,6 +29,7 @@ flowchart LR
 
 | Layer | Service | Why this choice |
 |---|---|---|
+| Hosting | S3 (private) + CloudFront with Origin Access Control | HTTPS on a global CDN. HTTPS is required for the browser SRP crypto. Free tier: 1 TB and 10M requests a month |
 | Identity | Cognito User Pool (Lite tier) | Managed sign-in. Groups give roles, and a custom attribute carries `hospital_id`. Free up to 10k monthly users |
 | API | API Gateway **HTTP API** | Cheaper and faster than REST API. A built-in JWT authorizer validates Cognito tokens with no code |
 | Compute | 6 Go Lambdas, arm64, `provided.al2023` | Go cold-starts fast and uses little memory (128 MB). arm64 is cheaper per ms |
@@ -162,6 +164,7 @@ See [DATA_MODEL.md](DATA_MODEL.md).
 | DynamoDB | 25 GB storage, Streams reads by Lambda free | KBs of synthetic data; on-demand requests ≈ $0.0000013 each |
 | SQS / SNS | 1M requests each; 1,000 emails | tens |
 | Cognito Lite | 10,000 monthly active users | 13 demo users |
+| CloudFront | 1 TB transfer + 10M requests / month | a few MB |
 | CloudWatch | 3 dashboards, 10 alarm metrics, 5 GB logs | 1 dashboard, 7 alarm metrics, 7-day retention |
 | API Gateway HTTP API, S3 | pay-per-request (about $1 per million API calls; GB-month storage) | thousands of calls, a few MB |
 

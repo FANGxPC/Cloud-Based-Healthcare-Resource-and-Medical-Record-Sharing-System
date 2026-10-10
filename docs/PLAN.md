@@ -103,6 +103,7 @@ an email address for the SNS subscription (you confirm it from your inbox).
 | 3.2 Dashboard + alarms (Lambda errors, DLQ depth → SNS email), 7-day logs | ✅ template validated. ✅ deployed (dev) |
 | 3.3 k6 scripts (cached reads, admission burst) | ✅ written. ⏳ run after deploy |
 | 3.4 GitHub Actions CI (vet, tests incl. DynamoDB Local, SAM validate+build, frontend, OpenAPI lint) | ✅ |
+| **Frontend hosting (private S3 + CloudFront HTTPS)** | ✅ live; `scriptsdeploy-frontend.ps1` |
 | **Deploy dev stack + seed + e2e** | ✅ hc-dev live in us-east-1; `scripts/e2e`: 31/31 checks pass against AWS |
 | 3.3 run k6 against dev | ⏳ |
 | Phase 4 Bedrock (optional) | ⏳ not started |
