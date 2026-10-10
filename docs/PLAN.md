@@ -101,4 +101,6 @@ an email address for the SNS subscription (you confirm it from your inbox).
 | 1.4 Documents (private S3, presigned PUT/GET, complete step, audited reads) | ✅ code + unit tests. ⏳ not yet deployed |
 | 3.1 TTL cache | ✅ (built in 1.2) |
 | 3.2 Dashboard + alarms (Lambda errors, DLQ depth → SNS email), 7-day logs | ✅ template validated. ⏳ not yet deployed |
+| 3.3 k6 scripts (cached reads, admission burst) | ✅ written. ⏳ run after deploy |
+| 3.4 GitHub Actions CI (vet, tests incl. DynamoDB Local, SAM validate+build, frontend, OpenAPI lint) | ✅ |
 | Everything else | ⏳ not started |

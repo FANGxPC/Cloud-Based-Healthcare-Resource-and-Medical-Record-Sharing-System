@@ -1,0 +1,72 @@
+# Continuous integration: every push and pull request is vetted, tested (including the
+# race-safety proof against DynamoDB Local), validated and built.
+# There is deliberately NO deploy step and NO AWS credentials. Deploying stays a manual,
+# deliberate action (see README).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Go vet + tests (with DynamoDB Local)
+    runs-on: ubuntu-latest
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:2.5.2 # default command runs in-memory
+        ports: ['8000:8000']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: go vet
+        working-directory: backend
+        run: go vet ./...
+      - name: gofmt
+        working-directory: backend
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: go test (unit + DynamoDB Local integration)
+        working-directory: backend
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+        run: go test -race -count=1 ./...
+      - name: build seed script
+        working-directory: scripts/seed
+        run: go vet ./... && go build ./...
+
+  sam:
+    name: SAM validate + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - run: sam validate --lint --region us-east-1
+      - run: sam build
+
+  frontend:
+    name: Frontend build + OpenAPI lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci + build
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Lint api/openapi.yaml
+        run: npx -y @redocly/cli@1.34.5 lint api/openapi.yaml
