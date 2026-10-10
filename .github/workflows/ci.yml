@@ -39,6 +39,9 @@ jobs:
       - name: build seed script
         working-directory: scripts/seed
         run: go vet ./... && go build ./...
+      - name: build e2e script (runs only against a deployed stack, not in CI)
+        working-directory: scripts/e2e
+        run: go vet ./... && go build ./...
 
   sam:
     name: SAM validate + build

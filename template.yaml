@@ -272,8 +272,11 @@ Resources:
       UserPoolId: !Ref UserPool
       GenerateSecret: false # browser apps can't keep a secret
       ExplicitAuthFlows:
-        - ALLOW_USER_SRP_AUTH # password never sent in plain text
+        - ALLOW_USER_SRP_AUTH # browser login: password never sent in plain text
         - ALLOW_REFRESH_TOKEN_AUTH
+        # Server-side login for the e2e test script and k6. It requires the caller's own AWS IAM
+        # credentials (cognito-idp:AdminInitiateAuth), so browsers can never use it.
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
       PreventUserExistenceErrors: ENABLED
       ReadAttributes: [email, email_verified, custom:hospital_id]
       # hospital_id is deliberately NOT writable by the client, so users can't move

@@ -92,15 +92,17 @@ an email address for the SNS subscription (you confirm it from your inbox).
 | 0.1 Tools | ✅ Go 1.27.2, SAM 1.168.0. DynamoDB Local runs as a Java jar (Docker optional) |
 | 0.2 Backend scaffold + template.yaml (Cognito, HTTP API, /health) | ✅ vet, test, validate --lint, build pass |
 | 0.3 Frontend shell | ✅ builds |
-| 1.1 Auth & roles (Cognito, JWT authorizer, `internal/auth`, `/me`, seed users, login UI) | ✅ code + unit tests. ⏳ not yet deployed |
-| 1.2 Hospitals & resources (+ 3.1 TTL cache, done early) | ✅ code + unit tests. ⏳ not yet deployed |
-| 1.3 Patient records + audit | ✅ code + unit tests. ⏳ not yet deployed |
+| 1.1 Auth & roles (Cognito, JWT authorizer, `internal/auth`, `/me`, seed users, login UI) | ✅ code + unit tests. ✅ deployed (dev) |
+| 1.2 Hospitals & resources (+ 3.1 TTL cache, done early) | ✅ code + unit tests. ✅ deployed (dev) |
+| 1.3 Patient records + audit | ✅ code + unit tests. ✅ deployed (dev) |
 | 2.1 Race-safe admissions + concurrency proof | ✅ 50-way race → exactly 1 admitted (DynamoDB Local, repeated 5×) |
-| 2.2 Low-resource alerts (Stream → Lambda → SNS email, crossing-only) | ✅ code + unit tests. ⏳ not yet deployed |
-| 2.3 Async transfers (SQS + DLQ, idempotent worker, accept/reject, SNS) | ✅ code + unit + integration tests. ⏳ not yet deployed |
-| 1.4 Documents (private S3, presigned PUT/GET, complete step, audited reads) | ✅ code + unit tests. ⏳ not yet deployed |
+| 2.2 Low-resource alerts (Stream → Lambda → SNS email, crossing-only) | ✅ code + unit tests. ✅ deployed (dev) |
+| 2.3 Async transfers (SQS + DLQ, idempotent worker, accept/reject, SNS) | ✅ code + unit + integration tests. ✅ deployed (dev) |
+| 1.4 Documents (private S3, presigned PUT/GET, complete step, audited reads) | ✅ code + unit tests. ✅ deployed (dev) |
 | 3.1 TTL cache | ✅ (built in 1.2) |
-| 3.2 Dashboard + alarms (Lambda errors, DLQ depth → SNS email), 7-day logs | ✅ template validated. ⏳ not yet deployed |
+| 3.2 Dashboard + alarms (Lambda errors, DLQ depth → SNS email), 7-day logs | ✅ template validated. ✅ deployed (dev) |
 | 3.3 k6 scripts (cached reads, admission burst) | ✅ written. ⏳ run after deploy |
 | 3.4 GitHub Actions CI (vet, tests incl. DynamoDB Local, SAM validate+build, frontend, OpenAPI lint) | ✅ |
-| Everything else | ⏳ not started |
+| **Deploy dev stack + seed + e2e** | ✅ hc-dev live in us-east-1; `scripts/e2e`: 31/31 checks pass against AWS |
+| 3.3 run k6 against dev | ⏳ |
+| Phase 4 Bedrock (optional) | ⏳ not started |

@@ -55,6 +55,18 @@ sam deploy --guided --parameter-overrides Stage=demo    # stable stack for prese
 Copy the stack outputs (`ApiUrl`, `UserPoolId`, `UserPoolClientId`) into `frontend/.env.local`.
 `samconfig.toml` and `.env.local` are git-ignored.
 
+## End-to-end test against the deployed stack
+
+```bash
+cd scripts/e2e && go run .
+```
+
+Signs in as a Patient, a Doctor and two HospitalAdmins with real Cognito tokens, then runs 31 checks against
+the live API: access rules (403s), audit visibility, optimistic locking, **concurrent admissions for the
+last bed (exactly one wins)**, the full transfer flow through SQS, and a document round-trip through S3
+presigned URLs (plus a 403 on an unsigned link). It restores bed counts afterwards, so it can be re-run live.
+It reads `frontend/.env.local` and `.env.demo-users`, both git-ignored.
+
 ## Seed synthetic data
 
 ```bash
