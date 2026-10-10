@@ -179,3 +179,38 @@ type Transfer struct {
 type TransferMessage struct {
 	TransferID string `json:"transferId"`
 }
+
+// DocumentCategory classifies an uploaded medical document.
+type DocumentCategory string
+
+var documentCategories = []DocumentCategory{"LAB_REPORT", "IMAGING", "PRESCRIPTION", "DISCHARGE_SUMMARY", "OTHER"}
+
+func (c DocumentCategory) Valid() bool { return slices.Contains(documentCategories, c) }
+
+// Allowed upload types and the size limit. They are checked when the upload URL is issued
+// and again after the upload.
+var AllowedContentTypes = []string{"application/pdf", "image/png", "image/jpeg", "text/plain"}
+
+const MaxDocumentBytes = 10 * 1024 * 1024 // 10 MB
+
+const (
+	DocPendingUpload = "PENDING_UPLOAD"
+	DocAvailable     = "AVAILABLE"
+)
+
+// Document is metadata for a file stored in S3. The bytes are never stored in DynamoDB or
+// passed through Lambda. Table: Documents (PK patientId, SK documentId).
+type Document struct {
+	PatientID            string           `dynamodbav:"patientId" json:"patientId"`
+	DocumentID           string           `dynamodbav:"documentId" json:"documentId"`
+	Title                string           `dynamodbav:"title" json:"title"`
+	Category             DocumentCategory `dynamodbav:"category" json:"category"`
+	FileName             string           `dynamodbav:"fileName" json:"fileName"`
+	ContentType          string           `dynamodbav:"contentType" json:"contentType"`
+	SizeBytes            int              `dynamodbav:"sizeBytes" json:"sizeBytes"`
+	S3Key                string           `dynamodbav:"s3Key" json:"-"` // internal: never exposed to clients
+	Status               string           `dynamodbav:"status" json:"status"`
+	UploadedBy           string           `dynamodbav:"uploadedBy" json:"uploadedBy"`
+	UploadedByHospitalID string           `dynamodbav:"uploadedByHospitalId" json:"uploadedByHospitalId"`
+	CreatedAt            string           `dynamodbav:"createdAt" json:"createdAt"`
+}

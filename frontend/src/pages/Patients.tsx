@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api, RESOURCE_LABELS, type Patient, type PatientSummary, type ResourceType } from '../api';
 import { Card, Status, errorText, useLoad } from '../components/common';
 import PatientProfile from './PatientProfile';
+import Documents from './Documents';
 import RequestTransfer from './RequestTransfer';
 
 export default function Patients({ ownHospitalId }: { ownHospitalId: string | null }) {
@@ -73,13 +74,16 @@ function PatientTable({ items, onOpen }: { items: PatientSummary[]; onOpen: (id:
 function PatientRecord({ patientId, ownHospitalId, onBack }: { patientId: string; ownHospitalId: string | null; onBack: () => void }) {
   const { data, error, loading, reload } = useLoad(() => api.patient(patientId), [patientId]);
   return (
-    <Card title="Patient record" actions={<button onClick={onBack}>← Back</button>}>
-      <p className="alert warn small">This access has been recorded in the audit log.</p>
-      <Status loading={loading} error={error} />
-      {data && <PatientProfile p={data} />}
-      {data && ownHospitalId && <AdmissionControls p={data} hospitalId={ownHospitalId} onChange={reload} />}
-      {data && ownHospitalId && <RequestTransfer patientId={data.patientId} fromHospitalId={ownHospitalId} />}
-    </Card>
+    <>
+      <Card title="Patient record" actions={<button onClick={onBack}>← Back</button>}>
+        <p className="alert warn small">This access has been recorded in the audit log.</p>
+        <Status loading={loading} error={error} />
+        {data && <PatientProfile p={data} />}
+        {data && ownHospitalId && <AdmissionControls p={data} hospitalId={ownHospitalId} onChange={reload} />}
+        {data && ownHospitalId && <RequestTransfer patientId={data.patientId} fromHospitalId={ownHospitalId} />}
+      </Card>
+      {data && <Documents patientId={data.patientId} canUpload />}
+    </>
   );
 }
 

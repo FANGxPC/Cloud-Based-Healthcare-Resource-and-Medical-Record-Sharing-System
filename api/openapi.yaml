@@ -405,7 +405,7 @@ paths:
     post:
       tags: [Documents]
       operationId: completeDocumentUpload
-      summary: Mark the upload complete (the server checks the object exists in S3)
+      summary: Mark the upload complete (the server checks the object exists in S3 and is at most 10 MB)
       x-allowed-groups: [Doctor]
       responses:
         '200':
@@ -413,6 +413,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Document' }
+        '400':
+          description: The uploaded file exceeds 10 MB and was deleted (`VALIDATION_ERROR`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }

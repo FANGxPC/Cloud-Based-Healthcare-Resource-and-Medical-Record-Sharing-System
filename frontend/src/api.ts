@@ -60,7 +60,23 @@ export type AuditEvent = {
 
 export type Page<T> = { items: T[]; nextToken?: string };
 
-export type Priority = 'CRITICAL' | 'URGENT' | 'ROUTINE';
+export type DocumentCategory = 'LAB_REPORT' | 'IMAGING' | 'PRESCRIPTION' | 'DISCHARGE_SUMMARY' | 'OTHER';
+
+export type MedicalDocument = {
+  patientId: string;
+  documentId: string;
+  title: string;
+  category: DocumentCategory;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  status: 'PENDING_UPLOAD' | 'AVAILABLE';
+  uploadedBy: string;
+  uploadedByHospitalId: string;
+  createdAt: string;
+};
+
+export type Priority ='CRITICAL' | 'URGENT' | 'ROUTINE';
 export type TransferStatus = 'QUEUED' | 'PENDING_APPROVAL' | 'ACCEPTED' | 'REJECTED' | 'NO_CAPACITY' | 'FAILED';
 
 export type Transfer = {
@@ -165,4 +181,22 @@ export const api = {
 
   decideTransfer: (transferId: string, decision: 'ACCEPT' | 'REJECT', note?: string) =>
     request<Transfer>('POST', `/transfers/${transferId}/decision`, { decision, note }),
+
+  documents: (patientId: string) => request<Page<MedicalDocument>>('GET', `/patients/${patientId}/documents`),
+
+  document: (patientId: string, documentId: string) =>
+    request<{ document: MedicalDocument; downloadUrl: string; expiresAt: string }>('GET', `/patients/${patientId}/documents/${documentId}`),
+
+  // Upload in three steps: (1) ask the API for a presigned URL, (2) PUT the file DIRECTLY to S3,
+  // (3) tell the API it's done. The file never passes through our Lambda.
+  uploadDocument: async (patientId: string, file: File, title: string, category: DocumentCategory) => {
+    const { document, uploadUrl } = await request<{ document: MedicalDocument; uploadUrl: string }>(
+      'POST',
+      `/patients/${patientId}/documents`,
+      { title, category, fileName: file.name, contentType: file.type, sizeBytes: file.size },
+    );
+    const put = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+    if (!put.ok) throw new ApiError(put.status, 'S3_UPLOAD_FAILED', `Upload to S3 failed (${put.status})`);
+    return request<MedicalDocument>('POST', `/patients/${patientId}/documents/${document.documentId}/complete`);
+  },
 };

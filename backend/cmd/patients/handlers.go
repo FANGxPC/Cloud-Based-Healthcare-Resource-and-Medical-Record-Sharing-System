@@ -27,10 +27,12 @@ type auditRecorder interface {
 }
 
 type app struct {
-	patients patientStore
-	auditLog auditReader
-	recorder auditRecorder
-	log      *slog.Logger
+	patients  patientStore
+	auditLog  auditReader
+	recorder  auditRecorder
+	documents documentStore
+	files     fileStore
+	log       *slog.Logger
 }
 
 var (
@@ -48,6 +50,10 @@ func (a *app) routes() *httpx.Router {
 	rt.Handle("GET /patients/{patientId}", patientsOrDoctors, a.getPatient)
 	rt.Handle("GET /patients/{patientId}/access-log", patientsOrAdmins, a.getAccessLog)
 	rt.Handle("GET /audit", admins, a.listHospitalAudit)
+	rt.Handle("GET /patients/{patientId}/documents", patientsOrDoctors, a.listDocuments)
+	rt.Handle("POST /patients/{patientId}/documents", doctors, a.createDocumentUpload)
+	rt.Handle("GET /patients/{patientId}/documents/{documentId}", patientsOrDoctors, a.getDocument)
+	rt.Handle("POST /patients/{patientId}/documents/{documentId}/complete", doctors, a.completeDocumentUpload)
 	return rt
 }
 

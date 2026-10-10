@@ -47,6 +47,7 @@ Globals:
         PATIENTS_TABLE: !Ref PatientsTable
         AUDIT_TABLE: !Ref AuditLogTable
         TRANSFERS_TABLE: !Ref TransfersTable
+        DOCUMENTS_TABLE: !Ref DocumentsTable
 
 Resources:
   # -------------------------------------------------------------------------
@@ -148,6 +149,66 @@ Resources:
             - { AttributeName: fromHospitalId, KeyType: HASH }
             - { AttributeName: createdAt, KeyType: RANGE }
           Projection: { ProjectionType: ALL }
+
+  DocumentsTable: # metadata only; the files live in DocumentsBucket
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub hc-documents-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: patientId, AttributeType: S }
+        - { AttributeName: documentId, AttributeType: S }
+      KeySchema:
+        - { AttributeName: patientId, KeyType: HASH }
+        - { AttributeName: documentId, KeyType: RANGE }
+
+  # -------------------------------------------------------------------------
+  # Files: private S3 bucket. Access ONLY via presigned URLs issued by the API.
+  # -------------------------------------------------------------------------
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Bucket names are global, so the account ID keeps the name unique.
+      BucketName: !Sub hc-docs-${Stage}-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256 # SSE-S3: free, AWS-managed keys (no KMS)
+      PublicAccessBlockConfiguration: # nothing in this bucket can ever be made public
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced # ACLs disabled; IAM decides access
+      CorsConfiguration: # lets the browser PUT/GET with presigned URLs from the frontend origin
+        CorsRules:
+          - AllowedOrigins: [!Ref FrontendOrigin]
+            AllowedMethods: [PUT, GET]
+            AllowedHeaders: [content-type]
+            MaxAge: 600
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+
+  DocumentsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocumentsBucket
+      PolicyDocument:
+        Statement:
+          - Sid: DenyInsecureTransport # HTTPS only
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt DocumentsBucket.Arn
+              - !Sub '${DocumentsBucket.Arn}/*'
+            Condition:
+              Bool: { 'aws:SecureTransport': 'false' }
 
   # -------------------------------------------------------------------------
   # Async: SQS queue + dead-letter queue for transfer processing
@@ -370,17 +431,29 @@ Resources:
     Properties:
       FunctionName: !Sub hc-patients-${Stage}
       CodeUri: backend/cmd/patients
-      Description: Patient records and access audit
+      Description: Patient records, documents and access audit
+      Environment:
+        Variables:
+          DOCUMENTS_BUCKET: !Ref DocumentsBucket
       LoggingConfig:
         LogGroup: !Ref PatientsLogGroup
       Policies:
         - DynamoDBReadPolicy: { TableName: !Ref PatientsTable }
         - DynamoDBReadPolicy: { TableName: !Ref AuditLogTable }
+        - DynamoDBReadPolicy: { TableName: !Ref DocumentsTable }
         # Append-only audit: PutItem only. No UpdateItem or DeleteItem, so code can't rewrite history.
         - Statement:
             - Effect: Allow
               Action: dynamodb:PutItem
               Resource: !GetAtt AuditLogTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt DocumentsTable.Arn
+            # Presigned URLs carry the permissions of whoever signed them, so the Lambda needs
+            # Get/Put on the objects. DeleteObject is only used to discard oversized uploads.
+            - Effect: Allow
+              Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+              Resource: !Sub '${DocumentsBucket.Arn}/patients/*'
       Events:
         GetMe:
           Type: HttpApi
@@ -397,6 +470,18 @@ Resources:
         ListHospitalAudit:
           Type: HttpApi
           Properties: { ApiId: !Ref HttpApi, Path: /audit, Method: GET }
+        ListDocuments:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/patients/{patientId}/documents', Method: GET }
+        CreateDocumentUpload:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/patients/{patientId}/documents', Method: POST }
+        GetDocument:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/patients/{patientId}/documents/{documentId}', Method: GET }
+        CompleteDocumentUpload:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/patients/{patientId}/documents/{documentId}/complete', Method: POST }
 
   PatientsLogGroup:
     Type: AWS::Logs::LogGroup
@@ -561,6 +646,8 @@ Outputs:
     Value: !Ref UserPool
   UserPoolClientId:
     Value: !Ref UserPoolClient
+  DocumentsBucketName:
+    Value: !Ref DocumentsBucket
   AlertsTopicArn:
     Value: !Ref AlertsTopic
   Region:

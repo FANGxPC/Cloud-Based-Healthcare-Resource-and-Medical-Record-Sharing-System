@@ -98,4 +98,5 @@ an email address for the SNS subscription (you confirm it from your inbox).
 | 2.1 Race-safe admissions + concurrency proof | ✅ 50-way race → exactly 1 admitted (DynamoDB Local, repeated 5×) |
 | 2.2 Low-resource alerts (Stream → Lambda → SNS email, crossing-only) | ✅ code + unit tests. ⏳ not yet deployed |
 | 2.3 Async transfers (SQS + DLQ, idempotent worker, accept/reject, SNS) | ✅ code + unit + integration tests. ⏳ not yet deployed |
+| 1.4 Documents (private S3, presigned PUT/GET, complete step, audited reads) | ✅ code + unit tests. ⏳ not yet deployed |
 | Everything else | ⏳ not started |
