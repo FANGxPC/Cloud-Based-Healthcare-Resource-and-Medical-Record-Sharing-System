@@ -60,6 +60,25 @@ export type AuditEvent = {
 
 export type Page<T> = { items: T[]; nextToken?: string };
 
+export type Priority = 'CRITICAL' | 'URGENT' | 'ROUTINE';
+export type TransferStatus = 'QUEUED' | 'PENDING_APPROVAL' | 'ACCEPTED' | 'REJECTED' | 'NO_CAPACITY' | 'FAILED';
+
+export type Transfer = {
+  transferId: string;
+  patientId: string;
+  fromHospitalId: string;
+  toHospitalId: string;
+  resourceType: ResourceType;
+  priority: Priority;
+  reason?: string;
+  status: TransferStatus;
+  requestedBy: string;
+  decidedBy?: string;
+  decisionNote?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 // ---- errors ----
 
 export class ApiError extends Error {
@@ -135,4 +154,15 @@ export const api = {
 
   discharge: (hospitalId: string, patientId: string) =>
     request<void>('DELETE', `/hospitals/${hospitalId}/admissions/${patientId}`),
+
+  requestTransfer: (body: { patientId: string; toHospitalId: string; resourceType: ResourceType; priority: Priority; reason?: string }) =>
+    request<Transfer>('POST', '/transfers', body),
+
+  transfers: (direction: 'incoming' | 'outgoing', status?: TransferStatus) =>
+    request<Page<Transfer>>('GET', `/transfers${qs({ direction, status })}`),
+
+  transfer: (transferId: string) => request<Transfer>('GET', `/transfers/${transferId}`),
+
+  decideTransfer: (transferId: string, decision: 'ACCEPT' | 'REJECT', note?: string) =>
+    request<Transfer>('POST', `/transfers/${transferId}/decision`, { decision, note }),
 };

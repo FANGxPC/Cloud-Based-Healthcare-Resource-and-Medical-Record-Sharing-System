@@ -121,3 +121,61 @@ type AuditEvent struct {
 	Timestamp       string      `dynamodbav:"timestamp" json:"timestamp"`
 	RequestID       string      `dynamodbav:"requestId,omitempty" json:"-"`
 }
+
+// TransferStatus is the lifecycle of an emergency transfer:
+//
+//	QUEUED ──worker──► PENDING_APPROVAL (bed held) ──admin──► ACCEPTED | REJECTED (bed released)
+//	   └────worker──► NO_CAPACITY | FAILED
+type TransferStatus string
+
+const (
+	TransferQueued          TransferStatus = "QUEUED"
+	TransferPendingApproval TransferStatus = "PENDING_APPROVAL"
+	TransferAccepted        TransferStatus = "ACCEPTED"
+	TransferRejected        TransferStatus = "REJECTED"
+	TransferNoCapacity      TransferStatus = "NO_CAPACITY"
+	TransferFailed          TransferStatus = "FAILED"
+)
+
+// Valid reports whether s is a known status (used to validate the ?status= filter).
+func (s TransferStatus) Valid() bool {
+	return slices.Contains([]TransferStatus{TransferQueued, TransferPendingApproval, TransferAccepted,
+		TransferRejected, TransferNoCapacity, TransferFailed}, s)
+}
+
+// Priority of a transfer request.
+type Priority string
+
+const (
+	PriorityCritical Priority = "CRITICAL"
+	PriorityUrgent   Priority = "URGENT"
+	PriorityRoutine  Priority = "ROUTINE"
+)
+
+func (p Priority) Valid() bool {
+	return p == PriorityCritical || p == PriorityUrgent || p == PriorityRoutine
+}
+
+// Transfer is a request to move a patient to another hospital's bed or ventilator.
+// Table: Transfers (PK transferId). GSIs: incoming (toHospitalId, createdAt) and outgoing (fromHospitalId, createdAt).
+type Transfer struct {
+	TransferID     string         `dynamodbav:"transferId" json:"transferId"`
+	PatientID      string         `dynamodbav:"patientId" json:"patientId"`
+	FromHospitalID string         `dynamodbav:"fromHospitalId" json:"fromHospitalId"`
+	ToHospitalID   string         `dynamodbav:"toHospitalId" json:"toHospitalId"`
+	ResourceType   ResourceType   `dynamodbav:"resourceType" json:"resourceType"`
+	Priority       Priority       `dynamodbav:"priority" json:"priority"`
+	Reason         string         `dynamodbav:"reason,omitempty" json:"reason,omitempty"`
+	Status         TransferStatus `dynamodbav:"status" json:"status"`
+	RequestedBy    string         `dynamodbav:"requestedBy" json:"requestedBy"`
+	DecidedBy      string         `dynamodbav:"decidedBy,omitempty" json:"decidedBy,omitempty"`
+	DecisionNote   string         `dynamodbav:"decisionNote,omitempty" json:"decisionNote,omitempty"`
+	CreatedAt      string         `dynamodbav:"createdAt" json:"createdAt"`
+	UpdatedAt      string         `dynamodbav:"updatedAt" json:"updatedAt"`
+}
+
+// TransferMessage is the SQS message body. It carries only the ID: the worker re-reads the
+// current state from DynamoDB, so a stale or duplicate message can't apply old data.
+type TransferMessage struct {
+	TransferID string `json:"transferId"`
+}

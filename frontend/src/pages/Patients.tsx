@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { api, RESOURCE_LABELS, type Patient, type PatientSummary, type ResourceType } from '../api';
 import { Card, Status, errorText, useLoad } from '../components/common';
 import PatientProfile from './PatientProfile';
+import RequestTransfer from './RequestTransfer';
 
 export default function Patients({ ownHospitalId }: { ownHospitalId: string | null }) {
   const [hospitalId, setHospitalId] = useState(ownHospitalId ?? 'H001');
@@ -77,6 +78,7 @@ function PatientRecord({ patientId, ownHospitalId, onBack }: { patientId: string
       <Status loading={loading} error={error} />
       {data && <PatientProfile p={data} />}
       {data && ownHospitalId && <AdmissionControls p={data} hospitalId={ownHospitalId} onChange={reload} />}
+      {data && ownHospitalId && <RequestTransfer patientId={data.patientId} fromHospitalId={ownHospitalId} />}
     </Card>
   );
 }

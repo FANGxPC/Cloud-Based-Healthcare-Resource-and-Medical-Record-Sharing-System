@@ -10,6 +10,7 @@ import ManageResources from './pages/ManageResources';
 import MyRecord from './pages/MyRecord';
 import Patients from './pages/Patients';
 import StaffAudit from './pages/StaffAudit';
+import Transfers from './pages/Transfers';
 
 type Tab = { id: string; label: string; groups: Group[]; render: (u: User) => ReactNode };
 
@@ -17,6 +18,12 @@ const TABS: Tab[] = [
   { id: 'my-record', label: 'My record', groups: ['Patient'], render: (u) => <MyRecord patientId={u.userId} /> },
   { id: 'availability', label: 'Availability', groups: ['Doctor', 'HospitalAdmin'], render: () => <Availability /> },
   { id: 'patients', label: 'Patients', groups: ['Doctor'], render: (u) => <Patients ownHospitalId={u.hospitalId} /> },
+  {
+    id: 'transfers',
+    label: 'Transfers',
+    groups: ['Doctor', 'HospitalAdmin'],
+    render: (u) => <Transfers isAdmin={u.groups.includes('HospitalAdmin')} />,
+  },
   {
     id: 'manage',
     label: 'Manage resources',

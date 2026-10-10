@@ -587,10 +587,11 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: "`INVALID_STATE`: the transfer is not PENDING_APPROVAL"
+          description: "`INVALID_STATE` (not PENDING_APPROVAL, or decided concurrently) or `PATIENT_CHANGED` (the patient was admitted or discharged meanwhile; retry)"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '503': { $ref: '#/components/responses/Busy' }
 
   # ---------------------------------------------------------------- Phase 4 (optional)
   /query:

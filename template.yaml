@@ -46,6 +46,7 @@ Globals:
         RESOURCES_TABLE: !Ref ResourcesTable
         PATIENTS_TABLE: !Ref PatientsTable
         AUDIT_TABLE: !Ref AuditLogTable
+        TRANSFERS_TABLE: !Ref TransfersTable
 
 Resources:
   # -------------------------------------------------------------------------
@@ -123,6 +124,52 @@ Resources:
             - { AttributeName: actorHospitalId, KeyType: HASH }
             - { AttributeName: eventKey, KeyType: RANGE }
           Projection: { ProjectionType: ALL }
+
+  TransfersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub hc-transfers-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: transferId, AttributeType: S }
+        - { AttributeName: toHospitalId, AttributeType: S }
+        - { AttributeName: fromHospitalId, AttributeType: S }
+        - { AttributeName: createdAt, AttributeType: S }
+      KeySchema:
+        - { AttributeName: transferId, KeyType: HASH }
+      GlobalSecondaryIndexes:
+        - IndexName: incoming # an admin's inbox, newest first
+          KeySchema:
+            - { AttributeName: toHospitalId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+        - IndexName: outgoing # a hospital's own requests
+          KeySchema:
+            - { AttributeName: fromHospitalId, KeyType: HASH }
+            - { AttributeName: createdAt, KeyType: RANGE }
+          Projection: { ProjectionType: ALL }
+
+  # -------------------------------------------------------------------------
+  # Async: SQS queue + dead-letter queue for transfer processing
+  # -------------------------------------------------------------------------
+  TransferDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub hc-transfers-dlq-${Stage}
+      SqsManagedSseEnabled: true # free SQS-managed encryption (no KMS key)
+      MessageRetentionPeriod: 1209600 # 14 days to investigate
+
+  TransferQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub hc-transfers-${Stage}
+      SqsManagedSseEnabled: true
+      # At least 6× the worker timeout (10 s), per AWS guidance, so an in-flight message isn't
+      # handed to a second worker while the first is still processing it.
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TransferDLQ.Arn
+        maxReceiveCount: 3 # after 3 failed attempts → DLQ (and the DLQ alarm fires)
 
   # -------------------------------------------------------------------------
   # Auth: Cognito User Pool
@@ -411,6 +458,96 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/hc-resource-alerts-${Stage}
+      RetentionInDays: 7
+
+  # Emergency transfers: request (→ SQS, 202), list, poll, decide.
+  TransfersApiFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub hc-transfers-api-${Stage}
+      CodeUri: backend/cmd/transfers-api
+      Description: Transfer requests and decisions
+      LoggingConfig:
+        LogGroup: !Ref TransfersApiLogGroup
+      Environment:
+        Variables:
+          TRANSFER_QUEUE_URL: !Ref TransferQueue
+          ALERTS_TOPIC_ARN: !Ref AlertsTopic
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref TransfersTable }
+        - DynamoDBReadPolicy: { TableName: !Ref HospitalsTable }
+        - SQSSendMessagePolicy: { QueueName: !GetAtt TransferQueue.QueueName }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertsTopic.TopicName }
+        - Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt TransfersTable.Arn
+            - Effect: Allow # accept: move the patient
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource: !GetAtt PatientsTable.Arn
+            - Effect: Allow # accept/reject: release a unit
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt ResourcesTable.Arn
+            - Effect: Allow
+              Action: dynamodb:PutItem
+              Resource: !GetAtt AuditLogTable.Arn
+      Events:
+        RequestTransfer:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /transfers, Method: POST }
+        ListTransfers:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: /transfers, Method: GET }
+        GetTransfer:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/transfers/{transferId}', Method: GET }
+        DecideTransfer:
+          Type: HttpApi
+          Properties: { ApiId: !Ref HttpApi, Path: '/transfers/{transferId}/decision', Method: POST }
+
+  TransfersApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/hc-transfers-api-${Stage}
+      RetentionInDays: 7
+
+  # Consumes the queue: holds a bed at the destination and emails the right hospital.
+  TransferWorkerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub hc-transfer-worker-${Stage}
+      CodeUri: backend/cmd/transfer-worker
+      Description: Processes queued transfers (SQS)
+      LoggingConfig:
+        LogGroup: !Ref TransferWorkerLogGroup
+      Environment:
+        Variables:
+          ALERTS_TOPIC_ARN: !Ref AlertsTopic
+      Policies:
+        - DynamoDBReadPolicy: { TableName: !Ref TransfersTable }
+        - SNSPublishMessagePolicy: { TopicName: !GetAtt AlertsTopic.TopicName }
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: [!GetAtt TransfersTable.Arn, !GetAtt ResourcesTable.Arn]
+      Events:
+        Queue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TransferQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes: [ReportBatchItemFailures] # retry only the failed messages
+            ScalingConfig:
+              MaximumConcurrency: 2 # stay small: free tier, and DynamoDB conditions handle races anyway
+
+  TransferWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/hc-transfer-worker-${Stage}
       RetentionInDays: 7
 
 # ---------------------------------------------------------------------------
