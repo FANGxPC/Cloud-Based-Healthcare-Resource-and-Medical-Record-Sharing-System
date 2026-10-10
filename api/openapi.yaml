@@ -1,0 +1,908 @@
+openapi: 3.0.3
+info:
+  title: Healthcare Resource & Medical Record Sharing API
+  version: 0.1.0
+  description: |
+    Serverless API (API Gateway HTTP API + Go Lambdas) for a hospital chain to share synthetic
+    patient records and track ICU beds, general beds and ventilators in real time.
+
+    **Authentication:** every endpoint except `/health` requires a Cognito **ID token** in
+    `Authorization: Bearer <token>`. The API Gateway JWT authorizer validates the signature, issuer and audience.
+
+    **Authorization** is enforced inside the Lambda from JWT claims (`sub`, `cognito:groups`,
+    `custom:hospital_id`). The vendor extension `x-allowed-groups` lists which Cognito groups may call
+    each operation, and `x-authz` describes any extra ownership rule.
+
+    **Auditing:** operations marked `x-audited: true` write an AuditLog entry when called by a Doctor.
+
+    All data in this system is **synthetic**.
+
+servers:
+  - url: https://{apiId}.execute-api.{region}.amazonaws.com
+    variables:
+      apiId: { default: example }
+      region: { default: us-east-1 }
+  - url: http://127.0.0.1:3000
+    description: sam local start-api
+
+security:
+  - cognitoJwt: []
+
+tags:
+  - name: Meta
+  - name: Hospitals
+  - name: Resources
+  - name: Admissions
+  - name: Patients
+  - name: Documents
+  - name: Transfers
+  - name: Audit
+  - name: Query
+
+paths:
+  /health:
+    get:
+      tags: [Meta]
+      operationId: health
+      summary: Liveness check (no auth)
+      security: []
+      x-allowed-groups: [public]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  stage: { type: string, example: dev }
+
+  /me:
+    get:
+      tags: [Meta]
+      operationId: getMe
+      summary: Identity of the caller, taken from the JWT
+      x-allowed-groups: [Patient, Doctor, HospitalAdmin]
+      responses:
+        '200':
+          description: Caller identity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------------------------------------------------------------- Hospitals
+  /hospitals:
+    get:
+      tags: [Hospitals]
+      operationId: listHospitals
+      summary: List all hospitals in the chain
+      x-allowed-groups: [Patient, Doctor, HospitalAdmin]
+      responses:
+        '200':
+          description: Hospitals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Hospital' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /hospitals/{hospitalId}:
+    parameters: [ { $ref: '#/components/parameters/HospitalId' } ]
+    get:
+      tags: [Hospitals]
+      operationId: getHospital
+      summary: Get one hospital with its current resources
+      x-allowed-groups: [Patient, Doctor, HospitalAdmin]
+      responses:
+        '200':
+          description: Hospital
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Hospital'
+                  - type: object
+                    properties:
+                      resources:
+                        type: array
+                        items: { $ref: '#/components/schemas/Resource' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Resources
+  /resources:
+    get:
+      tags: [Resources]
+      operationId: listResources
+      summary: Chain-wide availability (served from a 15 s in-memory cache)
+      description: |
+        Returns every hospital's resources. Responses may be up to ~15 s stale. `cachedAt` shows
+        when the data was read from DynamoDB.
+      x-allowed-groups: [Doctor, HospitalAdmin]
+      parameters:
+        - name: resourceType
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/ResourceType' }
+        - name: onlyAvailable
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Availability
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cachedAt: { type: string, format: date-time }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Resource' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /hospitals/{hospitalId}/resources:
+    parameters: [ { $ref: '#/components/parameters/HospitalId' } ]
+    get:
+      tags: [Resources]
+      operationId: listHospitalResources
+      summary: Resources of one hospital (read straight from DynamoDB, not cached)
+      x-allowed-groups: [Doctor, HospitalAdmin]
+      responses:
+        '200':
+          description: Resources
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Resource' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /hospitals/{hospitalId}/resources/{resourceType}:
+    parameters:
+      - $ref: '#/components/parameters/HospitalId'
+      - $ref: '#/components/parameters/ResourceTypePath'
+    put:
+      tags: [Resources]
+      operationId: updateResource
+      summary: Set capacity / availability / alert threshold
+      description: |
+        Uses optimistic locking: send the `version` you last read. If someone else changed the row
+        in between (including a bed booking), the request fails with `409 VERSION_CONFLICT`. Re-read and retry.
+      x-allowed-groups: [HospitalAdmin]
+      x-authz: "claims.custom:hospital_id == path.hospitalId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateResourceRequest' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Resource' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ---------------------------------------------------------------- Admissions
+  /hospitals/{hospitalId}/admissions:
+    parameters: [ { $ref: '#/components/parameters/HospitalId' } ]
+    post:
+      tags: [Admissions]
+      operationId: admitPatient
+      summary: Admit a patient to a bed or ventilator (race-safe)
+      description: |
+        Decrements `available` with a DynamoDB conditional write (`available > 0`), in the same
+        transaction that records the admission on the patient. Concurrent requests for the last unit
+        get exactly one `201` and the rest `409 NO_CAPACITY`.
+      x-allowed-groups: [Doctor, HospitalAdmin]
+      x-authz: "claims.custom:hospital_id == path.hospitalId"
+      x-audited: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdmitRequest' }
+      responses:
+        '201':
+          description: Admitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Admission' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "`NO_CAPACITY` (no unit free) or `ALREADY_ADMITTED`"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /hospitals/{hospitalId}/admissions/{patientId}:
+    parameters:
+      - $ref: '#/components/parameters/HospitalId'
+      - $ref: '#/components/parameters/PatientId'
+    delete:
+      tags: [Admissions]
+      operationId: dischargePatient
+      summary: Discharge a patient and release the unit
+      x-allowed-groups: [Doctor, HospitalAdmin]
+      x-authz: "claims.custom:hospital_id == path.hospitalId"
+      x-audited: true
+      responses:
+        '204': { description: Discharged }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: "`NOT_ADMITTED_HERE`"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ---------------------------------------------------------------- Patients
+  /patients:
+    get:
+      tags: [Patients]
+      operationId: listPatients
+      summary: List patients currently at a hospital
+      x-allowed-groups: [Doctor]
+      parameters:
+        - name: hospitalId
+          in: query
+          required: false
+          description: Defaults to the caller's own hospital. Doctors may list any hospital in the chain.
+          schema: { type: string }
+        - name: lastNamePrefix
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Patient summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PatientSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /patients/{patientId}:
+    parameters: [ { $ref: '#/components/parameters/PatientId' } ]
+    get:
+      tags: [Patients]
+      operationId: getPatient
+      summary: Full patient profile
+      x-allowed-groups: [Patient, Doctor]
+      x-authz: "Patient: claims.sub == path.patientId. Doctor: any patient in the chain."
+      x-audited: true
+      responses:
+        '200':
+          description: Patient
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Patient' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- Documents
+  /patients/{patientId}/documents:
+    parameters: [ { $ref: '#/components/parameters/PatientId' } ]
+    get:
+      tags: [Documents]
+      operationId: listDocuments
+      summary: List a patient's documents (metadata only), newest first
+      x-allowed-groups: [Patient, Doctor]
+      x-authz: "Patient: claims.sub == path.patientId. Doctor: any patient."
+      x-audited: true
+      responses:
+        '200':
+          description: Documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Document' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Documents]
+      operationId: createDocumentUpload
+      summary: Create document metadata and get a presigned S3 PUT URL
+      description: |
+        The client uploads the file **directly to S3** with
+        `PUT {uploadUrl}` and header `Content-Type: {contentType}` (the URL expires in 5 minutes), then calls
+        `POST .../complete`. File bytes never pass through Lambda.
+      x-allowed-groups: [Doctor]
+      x-audited: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateDocumentRequest' }
+      responses:
+        '201':
+          description: Upload URL issued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [document, uploadUrl, expiresAt]
+                properties:
+                  document: { $ref: '#/components/schemas/Document' }
+                  uploadUrl: { type: string, format: uri }
+                  expiresAt: { type: string, format: date-time }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /patients/{patientId}/documents/{documentId}:
+    parameters:
+      - $ref: '#/components/parameters/PatientId'
+      - $ref: '#/components/parameters/DocumentId'
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      summary: Document metadata plus a presigned S3 GET URL (5 minutes)
+      x-allowed-groups: [Patient, Doctor]
+      x-authz: "Patient: claims.sub == path.patientId. Doctor: any patient."
+      x-audited: true
+      responses:
+        '200':
+          description: Document with download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [document, downloadUrl, expiresAt]
+                properties:
+                  document: { $ref: '#/components/schemas/Document' }
+                  downloadUrl: { type: string, format: uri }
+                  expiresAt: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "`NOT_UPLOADED`: the upload was never completed"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /patients/{patientId}/documents/{documentId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/PatientId'
+      - $ref: '#/components/parameters/DocumentId'
+    post:
+      tags: [Documents]
+      operationId: completeDocumentUpload
+      summary: Mark the upload complete (the server checks the object exists in S3)
+      x-allowed-groups: [Doctor]
+      responses:
+        '200':
+          description: Document now AVAILABLE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "`OBJECT_MISSING`: nothing was uploaded to S3"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ---------------------------------------------------------------- Audit
+  /patients/{patientId}/access-log:
+    parameters: [ { $ref: '#/components/parameters/PatientId' } ]
+    get:
+      tags: [Audit]
+      operationId: getAccessLog
+      summary: Who accessed this patient's record
+      x-allowed-groups: [Patient, HospitalAdmin]
+      x-authz: |
+        Patient: claims.sub == path.patientId (sees all entries).
+        HospitalAdmin: only entries where actorHospitalId == claims.custom:hospital_id.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/NextToken'
+      responses:
+        '200':
+          description: Audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEvent' }
+                  nextToken: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /audit:
+    get:
+      tags: [Audit]
+      operationId: listHospitalAudit
+      summary: Record accesses made by staff of the admin's own hospital
+      x-allowed-groups: [HospitalAdmin]
+      x-authz: "Always scoped to claims.custom:hospital_id"
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/NextToken'
+      responses:
+        '200':
+          description: Audit events, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditEvent' }
+                  nextToken: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- Transfers
+  /transfers:
+    post:
+      tags: [Transfers]
+      operationId: requestTransfer
+      summary: Request an emergency transfer (asynchronous, returns 202)
+      description: |
+        Writes the transfer with status `QUEUED`, sends it to SQS and returns **202** immediately.
+        The `transfer-worker` Lambda then holds a bed at the destination (race-safe conditional
+        write) and sets `PENDING_APPROVAL`, or sets `NO_CAPACITY`, then emails the destination admins
+        via SNS. Poll `GET /transfers/{transferId}` (the `Location` header) for the outcome.
+      x-allowed-groups: [Doctor]
+      x-authz: "fromHospitalId is always the caller's claims.custom:hospital_id; toHospitalId must differ"
+      x-audited: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTransferRequest' }
+      responses:
+        '202':
+          description: Accepted for processing
+          headers:
+            Location:
+              schema: { type: string, example: /transfers/01JA2B3C4D5E6F7G8H9J0K1M2N }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    get:
+      tags: [Transfers]
+      operationId: listTransfers
+      summary: Incoming or outgoing transfers for the caller's hospital, newest first
+      x-allowed-groups: [Doctor, HospitalAdmin]
+      x-authz: "Always scoped to claims.custom:hospital_id"
+      parameters:
+        - name: direction
+          in: query
+          required: true
+          schema: { type: string, enum: [incoming, outgoing] }
+        - name: status
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/TransferStatus' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/NextToken'
+      responses:
+        '200':
+          description: Transfers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Transfer' }
+                  nextToken: { type: string, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /transfers/{transferId}:
+    parameters: [ { $ref: '#/components/parameters/TransferId' } ]
+    get:
+      tags: [Transfers]
+      operationId: getTransfer
+      summary: Get one transfer (poll after 202)
+      x-allowed-groups: [Doctor, HospitalAdmin]
+      x-authz: "caller's hospital_id must be fromHospitalId or toHospitalId"
+      responses:
+        '200':
+          description: Transfer
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /transfers/{transferId}/decision:
+    parameters: [ { $ref: '#/components/parameters/TransferId' } ]
+    post:
+      tags: [Transfers]
+      operationId: decideTransfer
+      summary: Accept or reject an incoming transfer
+      description: |
+        ACCEPT moves the patient to the destination, keeps the held bed, and releases their bed at the origin
+        if they had one. REJECT releases the held bed. Both are single DynamoDB transactions
+        conditioned on `status = PENDING_APPROVAL`, so a double-click can't apply the decision twice.
+      x-allowed-groups: [HospitalAdmin]
+      x-authz: "claims.custom:hospital_id == transfer.toHospitalId"
+      x-audited: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferDecisionRequest' }
+      responses:
+        '200':
+          description: Decision applied
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Transfer' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "`INVALID_STATE`: the transfer is not PENDING_APPROVAL"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ---------------------------------------------------------------- Phase 4 (optional)
+  /query:
+    post:
+      tags: [Query]
+      operationId: naturalLanguageQuery
+      summary: "(Phase 4, behind the EnableNLQuery flag) Ask about resource availability in plain English"
+      description: |
+        Example: "Which hospitals have a free ICU bed and a ventilator?" Amazon Nova Micro (Bedrock)
+        turns the question into a structured filter, and the Lambda answers from the cached resource data.
+        **No patient data is ever sent to the model.** Returns `404` when the feature flag is off.
+      x-allowed-groups: [Doctor, HospitalAdmin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string, maxLength: 300 }
+      responses:
+        '200':
+          description: Answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer: { type: string }
+                  interpretedFilter: { type: object, additionalProperties: true }
+                  matches:
+                    type: array
+                    items: { $ref: '#/components/schemas/Resource' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    cognitoJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Cognito User Pool ID token. Claims used: `sub`, `cognito:groups`
+        (Patient | Doctor | HospitalAdmin), `custom:hospital_id`.
+
+  parameters:
+    HospitalId:
+      name: hospitalId
+      in: path
+      required: true
+      schema: { type: string, example: H001 }
+    PatientId:
+      name: patientId
+      in: path
+      required: true
+      schema: { type: string }
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema: { type: string }
+    TransferId:
+      name: transferId
+      in: path
+      required: true
+      schema: { type: string }
+    ResourceTypePath:
+      name: resourceType
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/ResourceType' }
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    NextToken:
+      name: nextToken
+      in: query
+      required: false
+      description: Opaque pagination token from the previous response
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Validation failed (`VALIDATION_ERROR`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid token (returned by API Gateway)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { type: string, example: Unauthorized }
+    Forbidden:
+      description: Authenticated, but not allowed (`FORBIDDEN`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found (`NOT_FOUND`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Conflicting state (`VERSION_CONFLICT`, `NO_CAPACITY`, ...)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: NO_CAPACITY
+          description: Machine-readable error code
+        message: { type: string, example: No ICU_BED available at H002 }
+        requestId: { type: string }
+
+    Group:
+      type: string
+      enum: [Patient, Doctor, HospitalAdmin]
+
+    Me:
+      type: object
+      required: [userId, groups]
+      properties:
+        userId: { type: string, description: Cognito sub (equals patientId for patients) }
+        email: { type: string, format: email }
+        groups:
+          type: array
+          items: { $ref: '#/components/schemas/Group' }
+        hospitalId: { type: string, nullable: true }
+
+    Hospital:
+      type: object
+      required: [hospitalId, name]
+      properties:
+        hospitalId: { type: string, example: H001 }
+        name: { type: string, example: Synthetic General Hospital North }
+        city: { type: string }
+        address: { type: string }
+        phone: { type: string }
+
+    ResourceType:
+      type: string
+      enum: [ICU_BED, GENERAL_BED, VENTILATOR]
+
+    Resource:
+      type: object
+      required: [hospitalId, resourceType, total, available, threshold, version]
+      properties:
+        hospitalId: { type: string }
+        hospitalName: { type: string }
+        resourceType: { $ref: '#/components/schemas/ResourceType' }
+        total: { type: integer, minimum: 0 }
+        available: { type: integer, minimum: 0 }
+        threshold: { type: integer, minimum: 0, description: Alert when available drops below this }
+        low: { type: boolean, description: available < threshold }
+        version: { type: integer }
+        updatedAt: { type: string, format: date-time }
+
+    UpdateResourceRequest:
+      type: object
+      required: [version]
+      properties:
+        total: { type: integer, minimum: 0 }
+        available: { type: integer, minimum: 0, description: Must be <= total }
+        threshold: { type: integer, minimum: 0 }
+        version: { type: integer, description: The version you last read (optimistic lock) }
+
+    AdmitRequest:
+      type: object
+      required: [patientId, resourceType]
+      properties:
+        patientId: { type: string }
+        resourceType: { $ref: '#/components/schemas/ResourceType' }
+
+    Admission:
+      type: object
+      required: [patientId, hospitalId, resourceType, admittedAt]
+      properties:
+        patientId: { type: string }
+        hospitalId: { type: string }
+        resourceType: { $ref: '#/components/schemas/ResourceType' }
+        admittedAt: { type: string, format: date-time }
+
+    PatientSummary:
+      type: object
+      required: [patientId, firstName, lastName]
+      properties:
+        patientId: { type: string }
+        firstName: { type: string }
+        lastName: { type: string }
+        dateOfBirth: { type: string, format: date }
+        currentHospitalId: { type: string }
+        admission:
+          type: object
+          allOf: [ { $ref: '#/components/schemas/Admission' } ]
+          nullable: true
+          description: Present only while the patient occupies a bed or ventilator
+
+    Patient:
+      allOf:
+        - $ref: '#/components/schemas/PatientSummary'
+        - type: object
+          properties:
+            sex: { type: string, enum: [F, M, X] }
+            bloodGroup: { type: string, example: O+ }
+            allergies:
+              type: array
+              items: { type: string }
+            conditions:
+              type: array
+              items: { type: string }
+            homeHospitalId: { type: string }
+            emergencyContact:
+              type: object
+              properties:
+                name: { type: string }
+                phone: { type: string }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+
+    DocumentCategory:
+      type: string
+      enum: [LAB_REPORT, IMAGING, PRESCRIPTION, DISCHARGE_SUMMARY, OTHER]
+
+    Document:
+      type: object
+      required: [patientId, documentId, title, fileName, contentType, status, createdAt]
+      properties:
+        patientId: { type: string }
+        documentId: { type: string }
+        title: { type: string }
+        category: { $ref: '#/components/schemas/DocumentCategory' }
+        fileName: { type: string }
+        contentType: { type: string, example: application/pdf }
+        sizeBytes: { type: integer }
+        status: { type: string, enum: [PENDING_UPLOAD, AVAILABLE] }
+        uploadedBy: { type: string }
+        uploadedByHospitalId: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    CreateDocumentRequest:
+      type: object
+      required: [title, fileName, contentType, sizeBytes]
+      properties:
+        title: { type: string, maxLength: 120 }
+        category: { $ref: '#/components/schemas/DocumentCategory' }
+        fileName: { type: string, maxLength: 200 }
+        contentType:
+          type: string
+          enum: [application/pdf, image/png, image/jpeg, text/plain]
+        sizeBytes: { type: integer, minimum: 1, maximum: 10485760, description: Max 10 MB }
+
+    AuditEvent:
+      type: object
+      required: [patientId, actorId, action, timestamp]
+      properties:
+        patientId: { type: string }
+        actorId: { type: string }
+        actorGroup: { $ref: '#/components/schemas/Group' }
+        actorHospitalId: { type: string }
+        action:
+          type: string
+          enum: [VIEW_PROFILE, LIST_DOCUMENTS, VIEW_DOCUMENT, UPLOAD_DOCUMENT, ADMIT, DISCHARGE, REQUEST_TRANSFER, DECIDE_TRANSFER]
+        targetId: { type: string, nullable: true }
+        timestamp: { type: string, format: date-time }
+
+    Priority:
+      type: string
+      enum: [CRITICAL, URGENT, ROUTINE]
+
+    TransferStatus:
+      type: string
+      enum: [QUEUED, PENDING_APPROVAL, ACCEPTED, REJECTED, NO_CAPACITY, FAILED]
+
+    CreateTransferRequest:
+      type: object
+      required: [patientId, toHospitalId, resourceType, priority]
+      properties:
+        patientId: { type: string }
+        toHospitalId: { type: string }
+        resourceType: { $ref: '#/components/schemas/ResourceType' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        reason: { type: string, maxLength: 500, description: "Free text. Synthetic only, never logged" }
+
+    TransferDecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [ACCEPT, REJECT] }
+        note: { type: string, maxLength: 500 }
+
+    Transfer:
+      type: object
+      required: [transferId, patientId, fromHospitalId, toHospitalId, resourceType, priority, status, createdAt]
+      properties:
+        transferId: { type: string }
+        patientId: { type: string }
+        fromHospitalId: { type: string }
+        toHospitalId: { type: string }
+        resourceType: { $ref: '#/components/schemas/ResourceType' }
+        priority: { $ref: '#/components/schemas/Priority' }
+        reason: { type: string }
+        status: { $ref: '#/components/schemas/TransferStatus' }
+        requestedBy: { type: string }
+        decidedBy: { type: string, nullable: true }
+        decisionNote: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }

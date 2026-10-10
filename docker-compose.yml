@@ -1,0 +1,7 @@
+# Local DynamoDB for development and the race-safety tests. Start with: docker compose up -d
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.5.2
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    ports:
+      - "8000:8000"

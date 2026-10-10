@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Cloud-Based Healthcare Resource and Medical Record Sharing System (synthetic data only).
+  Serverless and pay-per-request: no VPC, no EC2, no provisioned capacity.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: '^[a-z0-9]{2,10}$'
+    Description: >
+      Suffix added to every resource name so several stacks can coexist,
+      e.g. "dev" for day-to-day work and "demo" kept stable for presentations.
+  FrontendOrigin:
+    Type: String
+    Default: http://localhost:5173
+    Description: Browser origin allowed by CORS (the Vite dev server by default).
+
+# ---------------------------------------------------------------------------
+# Defaults applied to every AWS::Serverless::Function
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: provided.al2023 # custom runtime: our compiled Go binary is named "bootstrap"
+    Architectures: [arm64]   # Graviton: cheaper per ms than x86
+    Handler: bootstrap
+    MemorySize: 128
+    Timeout: 10
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+
+Resources:
+  # -------------------------------------------------------------------------
+  # Auth: Cognito User Pool
+  # -------------------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub hc-users-${Stage}
+      UserPoolTier: LITE # Lite tier: the cheapest; free up to 10,000 monthly active users
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      # No self sign-up: every account is created by scripts/seed (admin-created only).
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Schema:
+        # Becomes the "custom:hospital_id" claim in the ID token.
+        - Name: hospital_id
+          AttributeDataType: String
+          Mutable: true
+          StringAttributeConstraints:
+            MinLength: '1'
+            MaxLength: '32'
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub hc-web-${Stage}
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false # browser apps can't keep a secret
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH # password never sent in plain text
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      ReadAttributes: [email, email_verified, custom:hospital_id]
+      # hospital_id is deliberately NOT writable by the client, so users can't move
+      # themselves to another hospital. Only admin API calls (the seed script) can set it.
+      WriteAttributes: [email]
+      IdTokenValidity: 60
+      AccessTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        IdToken: minutes
+        AccessToken: minutes
+        RefreshToken: days
+
+  # Group names are NOT stage-suffixed: they are scoped inside the (suffixed) pool,
+  # and the Go code compares them against the fixed values in the cognito:groups claim.
+  PatientGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Patient
+      UserPoolId: !Ref UserPool
+      Description: Can read only their own profile and documents
+      Precedence: 3
+  DoctorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Doctor
+      UserPoolId: !Ref UserPool
+      Description: Can read and upload records for any patient in the chain (audited)
+      Precedence: 2
+  HospitalAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: HospitalAdmin
+      UserPoolId: !Ref UserPool
+      Description: Manages resources and incoming transfers for their own hospital_id
+      Precedence: 1
+
+  # -------------------------------------------------------------------------
+  # API: HTTP API with a Cognito JWT authorizer
+  # -------------------------------------------------------------------------
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Name: !Sub hc-api-${Stage}
+      # Throttling caps the request rate so a runaway script or load test can't exhaust the free tier.
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 25
+      CorsConfiguration:
+        AllowOrigins: [!Ref FrontendOrigin]
+        AllowHeaders: [authorization, content-type]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+        MaxAge: 600
+      Auth:
+        # Every route requires a valid Cognito ID token unless it opts out (see /health).
+        DefaultAuthorizer: CognitoJwt
+        Authorizers:
+          CognitoJwt:
+            IdentitySource: $request.header.Authorization
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience: [!Ref UserPoolClient] # ID tokens carry aud = app client ID
+
+  # -------------------------------------------------------------------------
+  # Functions
+  # -------------------------------------------------------------------------
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: go1.x # SAM compiles the Go code into ./bootstrap for provided.al2023
+    Properties:
+      FunctionName: !Sub hc-health-${Stage}
+      CodeUri: backend/cmd/health
+      Description: GET /health liveness check (no auth)
+      LoggingConfig:
+        LogGroup: !Ref HealthLogGroup
+      Events:
+        GetHealth:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /health
+            Method: GET
+            Auth:
+              Authorizer: NONE # public on purpose: it returns no data
+
+  # Explicit log group so retention is 7 days. Lambda's default log group never expires.
+  HealthLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/hc-health-${Stage}
+      RetentionInDays: 7
+
+# ---------------------------------------------------------------------------
+# Outputs: values the frontend (.env.local) and seed scripts need
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiUrl:
+    Description: Base URL of the HTTP API
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  Region:
+    Value: !Ref AWS::Region
+  Stage:
+    Value: !Ref Stage

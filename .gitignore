@@ -1,0 +1,46 @@
+# ---- Secrets & local config (never commit) ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+samconfig.toml
+samconfig.*.toml
+.aws/
+aws-exports.js
+amplifyconfiguration.json
+frontend/src/config.local.ts
+env.json
+*.secret*
+
+# ---- SAM / AWS build output ----
+.aws-sam/
+packaged*.yaml
+
+# ---- Go ----
+backend/bin/
+*.exe
+*.test
+*.out
+coverage.*
+bootstrap
+
+# ---- Node / frontend ----
+node_modules/
+frontend/dist/
+.vite/
+npm-debug.log*
+
+# ---- Local data / test artefacts ----
+docker/dynamodb/
+scripts/seed/output/
+k6/results/
+*.log
+
+# ---- Editor / OS ----
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
